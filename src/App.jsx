@@ -359,6 +359,7 @@ export default function ScriptureMemorizeApp() {
   const [showSettings, setShowSettings] = useState(false);
   const [isLoadingChapter, setIsLoadingChapter] = useState(false);
   const [browseChapterNum, setBrowseChapterNum] = useState("");
+  const [continuousMode, setContinuousMode] = useState(true);
   const recognitionRef = useRef(null);
   const synthRef = useRef(window.speechSynthesis);
 
@@ -446,17 +447,8 @@ export default function ScriptureMemorizeApp() {
       
       // Check completion
       if (result.matchedUpTo >= result.total && result.total > 0) {
-        // Segment complete!
-        recognition.stop();
-        setIsListening(false);
-        
         const pct = Math.round((result.matchedUpTo / result.total) * 100);
-        if (pct >= 90) {
-          setCoachMessage("Excellent! You've got this passage down well.");
-        } else if (pct >= 70) {
-          setCoachMessage("Good work! A few more tries and you'll have it perfect.");
-        }
-        
+
         // Update progress
         const key = practiceRef;
         setProgress(prev => ({
@@ -470,6 +462,27 @@ export default function ScriptureMemorizeApp() {
             status: pct >= 90 ? "memorized" : pct >= 60 ? "learning" : "in_progress",
           }
         }));
+
+        // Auto-advance in continuous mode
+        setCurrentSegment(prev => {
+          if (prev < practiceSegments.length - 1) {
+            setSpokenText("");
+            setAlignmentResult(null);
+            if (continuousMode) {
+              setCoachMessage("");
+            } else {
+              recognition.stop();
+              setIsListening(false);
+              setCoachMessage(pct >= 90 ? "Excellent! Segment complete." : "Good work! Moving on.");
+            }
+            return prev + 1;
+          } else {
+            recognition.stop();
+            setIsListening(false);
+            setCoachMessage("You've completed the entire passage!");
+            return prev;
+          }
+        });
       }
     };
 
@@ -480,15 +493,29 @@ export default function ScriptureMemorizeApp() {
       setIsListening(false);
     };
 
-    recognition.onend = () => setIsListening(false);
-    
+    recognition.onend = () => {
+      // In continuous mode, restart if we haven't finished all segments
+      if (continuousMode && recognitionRef.current === recognition) {
+        setCurrentSegment(prev => {
+          if (prev < practiceSegments.length - 1 || (alignmentResult && alignmentResult.matchedUpTo < alignmentResult.total)) {
+            try { recognition.start(); } catch(e) {}
+          } else {
+            setIsListening(false);
+          }
+          return prev;
+        });
+      } else {
+        setIsListening(false);
+      }
+    };
+
     recognitionRef.current = recognition;
     recognition.start();
     setIsListening(true);
     setSpokenText("");
     setAlignmentResult(null);
     setCoachMessage("Go ahead — I'm listening.");
-  }, [expectedWords, practiceRef, practiceSegments]);
+  }, [expectedWords, practiceRef, practiceSegments, continuousMode, alignmentResult]);
 
   const stopListening = useCallback(() => {
     if (recognitionRef.current) {
@@ -712,21 +739,20 @@ export default function ScriptureMemorizeApp() {
       {/* Quick Start */}
       <div className="px-5 mb-4">
         <h2 className="text-sm tracking-[0.2em] uppercase text-stone-500 mb-3 font-medium">Popular Passages</h2>
-        <div className="grid grid-cols-2 gap-2.5">
+        <div className="space-y-1">
           {POPULAR_PASSAGES.map((p, i) => (
             <button
               key={i}
               onClick={() => startPractice(p.book, p.chapter, p.verse || null)}
-              className="p-3.5 rounded-xl text-left transition-all hover:scale-[1.02] active:scale-[0.98]"
-              style={{
-                background: `linear-gradient(${135 + i * 15}deg, ${['#1c1917','#1a1510','#171412','#18150f','#1a1614','#191510','#1b1812','#181411','#171310','#1a1713','#191411','#181512'][i]}f0, #0d0b09)`,
-                border: "1px solid #292524"
-              }}
+              className="w-full flex items-center justify-between py-2.5 px-3 rounded-lg hover:bg-stone-800/30 transition-colors group"
             >
-              <p className="text-amber-600/60 text-[10px] tracking-[0.15em] uppercase">{p.ref}</p>
-              <p className="text-stone-200 text-sm mt-1 leading-snug" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
-                {p.label}
-              </p>
+              <div className="flex items-center gap-3">
+                <span className="text-amber-600/50 text-xs w-24 text-left shrink-0">{p.ref}</span>
+                <span className="text-stone-300 text-sm" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
+                  {p.label}
+                </span>
+              </div>
+              <span className="text-stone-600 group-hover:text-stone-400 transition-colors"><Icons.ChevronRight /></span>
             </button>
           ))}
         </div>
@@ -1114,19 +1140,32 @@ export default function ScriptureMemorizeApp() {
             </button>
           </div>
 
-          {/* TTS speed slider */}
-          <div className="mt-4 flex items-center justify-center gap-3">
-            <span className="text-stone-500 text-[10px] tracking-wider">SLOW</span>
-            <input
-              type="range"
-              min="0.5"
-              max="1.2"
-              step="0.05"
-              value={ttsRate}
-              onChange={(e) => setTtsRate(parseFloat(e.target.value))}
-              className="w-32 accent-amber-600"
-            />
-            <span className="text-stone-500 text-[10px] tracking-wider">FAST</span>
+          {/* Continuous mode toggle + TTS speed */}
+          <div className="mt-4 flex items-center justify-center gap-5">
+            <button
+              onClick={() => setContinuousMode(prev => !prev)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] tracking-wider uppercase transition-all ${
+                continuousMode
+                  ? "bg-amber-900/30 text-amber-400 border border-amber-800/30"
+                  : "bg-stone-800/30 text-stone-500 border border-stone-700/20"
+              }`}
+            >
+              <Icons.Repeat />
+              Continuous
+            </button>
+            <div className="flex items-center gap-2">
+              <span className="text-stone-500 text-[10px] tracking-wider">SLOW</span>
+              <input
+                type="range"
+                min="0.5"
+                max="1.2"
+                step="0.05"
+                value={ttsRate}
+                onChange={(e) => setTtsRate(parseFloat(e.target.value))}
+                className="w-24"
+              />
+              <span className="text-stone-500 text-[10px] tracking-wider">FAST</span>
+            </div>
           </div>
         </div>
       </div>
