@@ -282,7 +282,7 @@ function levenshtein(a, b) {
 }
 
 // ─── Segment verse text into memorizable phrases ───
-function segmentText(text, targetLen = 14) {
+function segmentText(text, targetLen = 25) {
   const clauses = text.split(/(?<=[,;:])\s+/);
   const segments = [];
   let current = "";
@@ -326,7 +326,6 @@ const Icons = {
 // ─── Storage helpers ───
 const STORAGE_KEY = "scripture_memorize_v1";
 const CHAPTER_CACHE_KEY = "scripture_chapter_cache";
-const DEEPGRAM_KEY_STORAGE = "scripture_deepgram_key";
 
 const loadState = () => {
   try {
@@ -345,12 +344,6 @@ const loadChapterCache = () => {
 };
 const saveChapterCache = (cache) => {
   try { localStorage.setItem(CHAPTER_CACHE_KEY, JSON.stringify(cache)); } catch(e) {}
-};
-const loadDeepgramKey = () => {
-  try { return localStorage.getItem(DEEPGRAM_KEY_STORAGE) || ""; } catch(e) { return ""; }
-};
-const saveDeepgramKey = (key) => {
-  try { localStorage.setItem(DEEPGRAM_KEY_STORAGE, key); } catch(e) {}
 };
 
 // ─── Bible API fetch ───
@@ -490,14 +483,8 @@ export default function ScriptureMemorizeApp() {
   const [isLoadingChapter, setIsLoadingChapter] = useState(false);
   const [browseChapterNum, setBrowseChapterNum] = useState("");
   const [continuousMode, setContinuousMode] = useState(true);
-  const [deepgramKey, setDeepgramKey] = useState("");
   const recognitionRef = useRef(null);
   const synthRef = useRef(window.speechSynthesis);
-  // Deepgram refs
-  const deepgramWsRef = useRef(null);
-  const deepgramRecorderRef = useRef(null);
-  const deepgramStreamRef = useRef(null);
-  const deepgramFinalTranscriptRef = useRef("");
   // Refs so recognition handler always sees current values
   const expectedWordsRef = useRef([]);
   const currentSegmentRef = useRef(0);
@@ -513,7 +500,6 @@ export default function ScriptureMemorizeApp() {
       if (saved.progress) setProgress(saved.progress);
       if (saved.lastSession) setSessionResumeInfo(saved.lastSession);
     }
-    setDeepgramKey(loadDeepgramKey());
   }, []);
 
   // Save state on changes
@@ -571,8 +557,8 @@ export default function ScriptureMemorizeApp() {
     setIsSpeaking(false);
   }, []);
 
-  // ─── Shared handler for processing transcript text (used by both Deepgram and Web Speech) ───
-  const handleSegmentComplete = useCallback((pct, recognition) => {
+  // ─── Shared handler for processing segment completion ───
+  const handleSegmentComplete = useCallback((pct) => {
     setProgress(prev => ({
       ...prev,
       [practiceRefRef.current]: {
@@ -603,125 +589,8 @@ export default function ScriptureMemorizeApp() {
     }
   }, []);
 
-  // ─── Deepgram WebSocket Streaming ───
-  const launchDeepgram = useCallback(() => {
-    const apiKey = loadDeepgramKey();
-    if (!apiKey) return false;
-
-    let segmentDone = false;
-    deepgramFinalTranscriptRef.current = "";
-
-    const startStreaming = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        deepgramStreamRef.current = stream;
-
-        const mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
-        deepgramRecorderRef.current = mediaRecorder;
-
-        const ws = new WebSocket(
-          "wss://api.deepgram.com/v1/listen?model=nova-2&language=en&smart_format=true&punctuate=true",
-          ["token", apiKey]
-        );
-        deepgramWsRef.current = ws;
-
-        ws.onopen = () => {
-          mediaRecorder.ondataavailable = (e) => {
-            if (ws.readyState === WebSocket.OPEN && e.data.size > 0) {
-              ws.send(e.data);
-            }
-          };
-          mediaRecorder.start(250);
-        };
-
-        ws.onmessage = (event) => {
-          if (segmentDone) return;
-          try {
-            const data = JSON.parse(event.data);
-            const transcript = data.channel?.alternatives?.[0]?.transcript || "";
-            const isFinal = data.is_final;
-
-            if (isFinal && transcript) {
-              deepgramFinalTranscriptRef.current = deepgramFinalTranscriptRef.current
-                ? deepgramFinalTranscriptRef.current + " " + transcript
-                : transcript;
-            }
-
-            // Build cumulative transcript: all final + current interim
-            const cumulative = isFinal
-              ? deepgramFinalTranscriptRef.current
-              : (deepgramFinalTranscriptRef.current ? deepgramFinalTranscriptRef.current + " " + transcript : transcript);
-
-            if (!cumulative) return;
-
-            setSpokenText(cumulative);
-
-            const curExpected = expectedWordsRef.current;
-            const spokenWords = normalize(cumulative).split(/\s+/).filter(Boolean);
-            const result = alignWords(spokenWords, curExpected);
-            setAlignmentResult(result);
-
-            // Segment complete?
-            if (result.matchedUpTo >= result.total && result.total > 0) {
-              segmentDone = true;
-              const pct = Math.round((result.matchedUpTo / result.total) * 100);
-
-              // Stop current Deepgram session
-              try { mediaRecorder.stop(); } catch(e) {}
-              try { stream.getTracks().forEach(t => t.stop()); } catch(e) {}
-              try { ws.close(); } catch(e) {}
-              deepgramWsRef.current = null;
-              deepgramRecorderRef.current = null;
-              deepgramStreamRef.current = null;
-
-              const isLast = currentSegmentRef.current >= practiceSegmentsRef.current.length - 1;
-
-              handleSegmentComplete(pct, null);
-
-              if (!isLast && continuousModeRef.current) {
-                // Restart Deepgram for next segment after brief pause
-                setTimeout(() => launchDeepgram(), 250);
-              }
-            }
-          } catch(e) {
-            // Ignore JSON parse errors
-          }
-        };
-
-        ws.onerror = () => {
-          setCoachMessage("Deepgram connection error. Check your API key.");
-          setIsListening(false);
-          try { mediaRecorder.stop(); } catch(e) {}
-          try { stream.getTracks().forEach(t => t.stop()); } catch(e) {}
-          deepgramWsRef.current = null;
-          deepgramRecorderRef.current = null;
-          deepgramStreamRef.current = null;
-        };
-
-        ws.onclose = () => {
-          // Only handle if not already cleaned up
-          if (!segmentDone && deepgramWsRef.current === ws) {
-            deepgramWsRef.current = null;
-          }
-        };
-
-        setIsListening(true);
-        setSpokenText("");
-        setAlignmentResult(null);
-        setCoachMessage("Go ahead \u2014 I'm listening. (Deepgram)");
-      } catch(e) {
-        setCoachMessage("Could not access microphone. Please allow mic access.");
-        setIsListening(false);
-        return;
-      }
-    };
-
-    startStreaming();
-    return true;
-  }, [handleSegmentComplete]);
-
-  // ─── Speech Recognition (Web Speech API fallback) ───
-  const launchWebSpeech = useCallback(() => {
+  // ─── Speech Recognition (Web Speech API) ───
+  const launchRecognition = useCallback(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
       setCoachMessage("Speech recognition is not supported in this browser. Please try Chrome.");
@@ -739,14 +608,24 @@ export default function ScriptureMemorizeApp() {
     recognition.lang = "en-US";
 
     let segmentDone = false;
+    let finalTranscript = "";
 
     recognition.onresult = (event) => {
       if (segmentDone) return;
 
-      let transcript = "";
+      // Separate final vs interim results to avoid interim guessing causing false matches
+      let currentFinal = "";
+      let currentInterim = "";
       for (let i = 0; i < event.results.length; i++) {
-        transcript += event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          currentFinal += event.results[i][0].transcript;
+        } else {
+          currentInterim += event.results[i][0].transcript;
+        }
       }
+      finalTranscript = currentFinal;
+      const transcript = (finalTranscript + " " + currentInterim).trim();
+
       setSpokenText(transcript);
 
       // Always read from refs so we match the CURRENT segment
@@ -755,8 +634,9 @@ export default function ScriptureMemorizeApp() {
       const result = alignWords(spokenWords, curExpected);
       setAlignmentResult(result);
 
-      // Segment complete?
-      if (result.matchedUpTo >= result.total && result.total > 0) {
+      // Segment complete at 85% threshold (more forgiving)
+      const threshold = Math.ceil(result.total * 0.85);
+      if (result.matchedUpTo >= threshold && result.total > 0) {
         segmentDone = true;
         const pct = Math.round((result.matchedUpTo / result.total) * 100);
 
@@ -766,14 +646,14 @@ export default function ScriptureMemorizeApp() {
 
         const isLast = currentSegmentRef.current >= practiceSegmentsRef.current.length - 1;
 
-        handleSegmentComplete(pct, recognition);
+        handleSegmentComplete(pct);
 
         if (!isLast && continuousModeRef.current) {
           setSpokenText("");
           setAlignmentResult(null);
           setCoachMessage("");
           // Brief pause then fresh recognition for the new segment
-          setTimeout(() => launchWebSpeech(), 250);
+          setTimeout(() => launchRecognition(), 250);
         }
       }
     };
@@ -807,17 +687,6 @@ export default function ScriptureMemorizeApp() {
     setCoachMessage("Go ahead \u2014 I'm listening.");
   }, [handleSegmentComplete]);
 
-  // ─── Unified launch: Deepgram first, Web Speech fallback ───
-  const launchRecognition = useCallback(() => {
-    const dgKey = loadDeepgramKey();
-    if (dgKey) {
-      const started = launchDeepgram();
-      if (started) return;
-    }
-    // Fallback to Web Speech API
-    launchWebSpeech();
-  }, [launchDeepgram, launchWebSpeech]);
-
   const startListening = launchRecognition;
 
   const stopListening = useCallback(() => {
@@ -825,19 +694,6 @@ export default function ScriptureMemorizeApp() {
     if (recognitionRef.current) {
       try { recognitionRef.current.abort(); } catch(e) {}
       recognitionRef.current = null;
-    }
-    // Stop Deepgram
-    if (deepgramRecorderRef.current) {
-      try { deepgramRecorderRef.current.stop(); } catch(e) {}
-      deepgramRecorderRef.current = null;
-    }
-    if (deepgramStreamRef.current) {
-      try { deepgramStreamRef.current.getTracks().forEach(t => t.stop()); } catch(e) {}
-      deepgramStreamRef.current = null;
-    }
-    if (deepgramWsRef.current) {
-      try { deepgramWsRef.current.close(); } catch(e) {}
-      deepgramWsRef.current = null;
     }
     setIsListening(false);
   }, []);
@@ -917,6 +773,14 @@ export default function ScriptureMemorizeApp() {
       setCoachMessage("You've completed all segments! Great work.");
     }
   }, [currentSegment, practiceSegments.length, stopListening, stopSpeaking]);
+
+  // Mark segment complete and advance
+  const markSegmentComplete = useCallback(() => {
+    stopListening();
+    stopSpeaking();
+    const pct = 100;
+    handleSegmentComplete(pct);
+  }, [stopListening, stopSpeaking, handleSegmentComplete]);
 
   const prevSegment = useCallback(() => {
     stopListening();
@@ -1382,6 +1246,38 @@ export default function ScriptureMemorizeApp() {
                 <p style={{ color: C.textDim, fontSize: 13, fontStyle: "italic" }}>{spokenText}</p>
               </div>
             )}
+
+            {/* Manual Next / Mark Complete buttons for recall/faded modes */}
+            {(practiceMode === "recall" || practiceMode === "faded") && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 20 }}>
+                <button
+                  onClick={nextSegment}
+                  disabled={currentSegment >= practiceSegments.length - 1}
+                  style={{
+                    padding: "10px 24px", borderRadius: 10, fontSize: 13, fontWeight: 500,
+                    letterSpacing: "0.05em", cursor: currentSegment >= practiceSegments.length - 1 ? "default" : "pointer",
+                    background: C.card, border: `1px solid ${C.cardBorder}`,
+                    color: currentSegment >= practiceSegments.length - 1 ? C.textFaint : C.accent,
+                    opacity: currentSegment >= practiceSegments.length - 1 ? 0.4 : 1,
+                    transition: "all 0.2s",
+                  }}
+                >
+                  Next
+                </button>
+                <button
+                  onClick={markSegmentComplete}
+                  style={{
+                    padding: "10px 24px", borderRadius: 10, fontSize: 13, fontWeight: 500,
+                    letterSpacing: "0.05em", cursor: "pointer",
+                    background: C.greenBg, border: `1px solid ${C.greenBorder}`,
+                    color: C.green, transition: "all 0.2s",
+                    display: "flex", alignItems: "center", gap: 6,
+                  }}
+                >
+                  <Icons.Check /> Mark Complete
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1706,25 +1602,6 @@ export default function ScriptureMemorizeApp() {
                 Settings
               </h2>
 
-              {/* Deepgram API Key */}
-              <div style={{ marginBottom: 20 }}>
-                <p style={{ ...S.label, marginBottom: 8 }}>Deepgram API Key</p>
-                <p style={{ color: C.textFaint, fontSize: 11, marginBottom: 8 }}>For enhanced voice recognition. Leave blank to use browser default.</p>
-                <input
-                  type="password"
-                  placeholder="Enter Deepgram API key..."
-                  value={deepgramKey}
-                  onChange={(e) => {
-                    setDeepgramKey(e.target.value);
-                    saveDeepgramKey(e.target.value);
-                  }}
-                  style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: C.card, border: `1px solid ${C.cardBorder}`, color: C.text, fontSize: 13, outline: "none", fontFamily: "inherit" }}
-                />
-                {deepgramKey && (
-                  <p style={{ color: C.green, fontSize: 10, marginTop: 4, letterSpacing: "0.05em" }}>Deepgram key saved - will be used for voice recognition</p>
-                )}
-              </div>
-
               {/* TTS Speed */}
               <div style={{ marginBottom: 20 }}>
                 <p style={{ ...S.label, marginBottom: 8 }}>Reading Speed</p>
@@ -1763,7 +1640,7 @@ export default function ScriptureMemorizeApp() {
               </div>
 
               {/* Clear Favorites */}
-              <div style={{ marginBottom: 10 }}>
+              <div style={{ marginBottom: 20 }}>
                 <button
                   onClick={() => {
                     if (window.confirm("Clear all favorites?")) {
@@ -1780,25 +1657,10 @@ export default function ScriptureMemorizeApp() {
                 </button>
               </div>
 
-              {/* Clear Chapter Cache */}
-              <div style={{ marginBottom: 20 }}>
-                <button
-                  onClick={() => {
-                    if (window.confirm("Clear cached chapters? They will be re-fetched when needed.")) {
-                      localStorage.removeItem(CHAPTER_CACHE_KEY);
-                    }
-                  }}
-                  style={{ ...S.card, width: "100%", padding: 14, textAlign: "left", cursor: "pointer" }}
-                >
-                  <p style={{ color: C.text, fontSize: 14 }}>Clear Chapter Cache</p>
-                  <p style={{ color: C.textFaint, fontSize: 11, marginTop: 2 }}>Remove downloaded chapters from local storage</p>
-                </button>
-              </div>
-
               {/* About */}
               <div style={{ paddingTop: 16, borderTop: `1px solid ${C.cardBorder}`, textAlign: "center" }}>
                 <p style={{ color: C.textDim, fontSize: 12 }}>Scripture Memory</p>
-                <p style={{ color: C.textFaint, fontSize: 10, marginTop: 2 }}>v0.3.0 &middot; KJV</p>
+                <p style={{ color: C.textFaint, fontSize: 10, marginTop: 2 }}>v0.4.0 &middot; KJV</p>
               </div>
             </div>
           </div>
