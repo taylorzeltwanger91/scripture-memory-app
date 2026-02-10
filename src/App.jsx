@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
-// ─── KJV Scripture Data (Sample passages for MVP demo) ─── 
+// ─── KJV Scripture Data (Sample passages for MVP demo) ───
 const KJV_DATA = {
   "Romans": {
     1: {
@@ -377,6 +377,27 @@ const BIBLE_BOOKS = [
   "1 John","2 John","3 John","Jude","Revelation",
 ];
 
+const BOOK_CHAPTERS = {
+  "Genesis":50,"Exodus":40,"Leviticus":27,"Numbers":36,"Deuteronomy":34,
+  "Joshua":24,"Judges":21,"Ruth":4,"1 Samuel":31,"2 Samuel":24,
+  "1 Kings":22,"2 Kings":25,"1 Chronicles":29,"2 Chronicles":36,
+  "Ezra":10,"Nehemiah":13,"Esther":10,"Job":42,"Psalms":150,
+  "Proverbs":31,"Ecclesiastes":12,"Song of Solomon":8,
+  "Isaiah":66,"Jeremiah":52,"Lamentations":5,"Ezekiel":48,"Daniel":12,
+  "Hosea":14,"Joel":3,"Amos":9,"Obadiah":1,"Jonah":4,"Micah":7,
+  "Nahum":3,"Habakkuk":3,"Zephaniah":3,"Haggai":2,"Zechariah":14,"Malachi":4,
+  "Matthew":28,"Mark":16,"Luke":24,"John":21,"Acts":28,
+  "Romans":16,"1 Corinthians":16,"2 Corinthians":13,
+  "Galatians":6,"Ephesians":6,"Philippians":4,"Colossians":4,
+  "1 Thessalonians":5,"2 Thessalonians":3,"1 Timothy":6,"2 Timothy":4,
+  "Titus":3,"Philemon":1,"Hebrews":13,"James":5,
+  "1 Peter":5,"2 Peter":3,"1 John":5,"2 John":1,"3 John":1,
+  "Jude":1,"Revelation":22,
+};
+
+const OT_BOOKS = BIBLE_BOOKS.slice(0, 39);
+const NT_BOOKS = BIBLE_BOOKS.slice(39);
+
 // ─── Popular passages for quick start ───
 const POPULAR_PASSAGES = [
   { ref: "Psalms 23", book: "Psalms", chapter: 23, label: "The Lord is My Shepherd" },
@@ -392,6 +413,46 @@ const POPULAR_PASSAGES = [
   { ref: "Galatians 5:22-23", book: "Galatians", chapter: 5, label: "Fruit of the Spirit" },
   { ref: "John 1:1", book: "John", chapter: 1, verse: 1, label: "In the Beginning Was the Word" },
 ];
+
+// ─── Featured passages for home view ───
+const FEATURED_PASSAGES = [
+  {
+    ref: "Psalms 23", book: "Psalms", chapter: 23,
+    label: "Psalm 23",
+    preview: "The LORD is my shepherd; I shall not want..."
+  },
+  {
+    ref: "John 3:16", book: "John", chapter: 3, verse: 16,
+    label: "John 3:16",
+    preview: "For God so loved the world, that he gave his only begotten Son..."
+  },
+  {
+    ref: "Romans 8:28", book: "Romans", chapter: 8, verse: 28,
+    label: "Romans 8",
+    preview: "And we know that all things work together for good..."
+  },
+];
+
+// ─── Color palette ───
+const C = {
+  bg: "#0f0d0a",
+  bgGrad: "linear-gradient(170deg, #16120e 0%, #0f0d0a 40%, #13100c 100%)",
+  card: "rgba(255,248,240,0.03)",
+  cardBorder: "rgba(255,248,240,0.06)",
+  accent: "#c8956c",
+  accentDim: "#8a7260",
+  accentGlow: "rgba(200,149,108,0.15)",
+  accentBorder: "rgba(200,149,108,0.25)",
+  text: "#e8e0d6",
+  textDim: "#9a9088",
+  textFaint: "#5c5650",
+  green: "#6abf7b",
+  greenBg: "rgba(106,191,123,0.1)",
+  greenBorder: "rgba(106,191,123,0.2)",
+  amberBg: "rgba(200,149,108,0.1)",
+  amberBorder: "rgba(200,149,108,0.2)",
+  red: "#dc2626",
+};
 
 // ─── Main App ───
 export default function ScriptureMemorizeApp() {
@@ -596,7 +657,7 @@ export default function ScriptureMemorizeApp() {
     setIsListening(true);
     setSpokenText("");
     setAlignmentResult(null);
-    setCoachMessage("Go ahead — I'm listening.");
+    setCoachMessage("Go ahead \u2014 I'm listening.");
   }, []);
 
   const startListening = launchRecognition;
@@ -650,7 +711,7 @@ export default function ScriptureMemorizeApp() {
 
   // ─── Toggle favorite ───
   const toggleFavorite = useCallback((ref) => {
-    setFavorites(prev => 
+    setFavorites(prev =>
       prev.includes(ref) ? prev.filter(r => r !== ref) : [...prev, ref]
     );
   }, []);
@@ -660,9 +721,9 @@ export default function ScriptureMemorizeApp() {
     if (!currentSegmentText) return;
     const words = currentSegmentText.split(/\s+/);
     const matchedCount = alignmentResult?.matchedUpTo || 0;
-    
+
     if (matchedCount === 0) {
-      setCoachMessage(`Let's start with: "${words.slice(0, 4).join(" ")}…"`);
+      setCoachMessage(`Let's start with: "${words.slice(0, 4).join(" ")}..."`);
       speak(words.slice(0, 4).join(" "), 0.7);
     } else if (matchedCount < words.length) {
       const nextWords = words.slice(matchedCount, matchedCount + 3).join(" ");
@@ -723,26 +784,29 @@ export default function ScriptureMemorizeApp() {
     const matched = alignmentResult?.matchedUpTo || 0;
 
     return (
-      <div className="text-2xl leading-relaxed font-serif tracking-wide" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
+      <div style={{ fontSize: "1.5rem", lineHeight: 1.8, fontFamily: "'Cormorant Garamond', Georgia, serif", letterSpacing: "0.02em" }}>
         {words.map((word, i) => {
-          let cls = "transition-all duration-300 ";
+          let color = C.text;
+          let opacity = 1;
           if (practiceMode === "recall" || practiceMode === "faded") {
             if (i < matched) {
-              cls += "text-amber-300 opacity-100";
+              color = C.accent;
+              opacity = 1;
             } else if (i === matched) {
-              cls += "text-stone-300 opacity-70 animate-pulse";
+              color = C.textDim;
+              opacity = 0.7;
             } else {
               if (practiceMode === "faded" && i < Math.floor(words.length / 2)) {
-                cls += "text-stone-400 opacity-50";
+                color = C.textDim;
+                opacity = 0.5;
               } else {
-                cls += "text-stone-600 opacity-30";
+                color = C.textFaint;
+                opacity = 0.3;
               }
             }
-          } else {
-            cls += "text-stone-200";
           }
           return (
-            <span key={i} className={cls}>
+            <span key={i} style={{ color, opacity, transition: "all 0.3s ease" }} className={i === matched && (practiceMode === "recall" || practiceMode === "faded") ? "animate-pulse" : ""}>
               {word}{" "}
             </span>
           );
@@ -751,21 +815,32 @@ export default function ScriptureMemorizeApp() {
     );
   };
 
+  // ─── Inline style helpers ───
+  const S = {
+    page: { display: "flex", flexDirection: "column", minHeight: "100vh", background: C.bgGrad },
+    heading: { fontFamily: "'Cormorant Garamond', Georgia, serif", fontWeight: 300 },
+    card: { background: C.card, border: `1px solid ${C.cardBorder}`, borderRadius: 16 },
+    label: { fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: C.textDim, fontWeight: 500 },
+  };
+
   // ─── Views ───
 
   // HOME
   const renderHome = () => (
-    <div className="flex flex-col min-h-screen" style={{ background: "linear-gradient(165deg, #1a1410 0%, #0d0b09 40%, #151210 100%)" }}>
+    <div style={S.page}>
       {/* Header */}
-      <div className="px-5 pt-8 pb-4">
-        <div className="flex items-center justify-between">
+      <div style={{ padding: "32px 20px 16px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
-            <h1 className="text-3xl font-light tracking-wide text-stone-100" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
+            <h1 style={{ ...S.heading, fontSize: "2rem", color: C.text, letterSpacing: "0.04em" }}>
               Scripture
             </h1>
-            <p className="text-xs tracking-[0.3em] uppercase text-amber-600/80 mt-0.5 font-medium">Memorize · KJV</p>
+            <p style={{ ...S.label, color: C.accentDim, marginTop: 2, fontSize: 10 }}>Memorize &middot; KJV</p>
           </div>
-          <button onClick={() => setShowSettings(true)} className="w-10 h-10 rounded-full bg-stone-800/50 flex items-center justify-center text-stone-400 hover:text-stone-200 transition-colors">
+          <button
+            onClick={() => setShowSettings(true)}
+            style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(255,248,240,0.04)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: C.textDim, cursor: "pointer" }}
+          >
             <Icons.Settings />
           </button>
         </div>
@@ -773,17 +848,14 @@ export default function ScriptureMemorizeApp() {
 
       {/* Resume card */}
       {sessionResumeInfo && (
-        <div className="mx-5 mb-5">
+        <div style={{ margin: "0 20px 20px" }}>
           <button
             onClick={() => startPractice(sessionResumeInfo.book, sessionResumeInfo.chapter, sessionResumeInfo.verse)}
-            className="w-full p-4 rounded-2xl text-left transition-all hover:scale-[1.01] active:scale-[0.99]"
-            style={{ background: "linear-gradient(135deg, #92400e20, #78350f30)", border: "1px solid #92400e30" }}
+            style={{ width: "100%", padding: 16, borderRadius: 16, textAlign: "left", background: C.accentGlow, border: `1px solid ${C.accentBorder}`, cursor: "pointer", transition: "transform 0.15s" }}
           >
-            <p className="text-amber-500/70 text-xs tracking-[0.2em] uppercase mb-1">Continue where you left off</p>
-            <p className="text-stone-100 text-lg" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
-              {sessionResumeInfo.ref}
-            </p>
-            <div className="flex items-center gap-2 mt-2 text-stone-400 text-sm">
+            <p style={{ ...S.label, color: C.accentDim, marginBottom: 4 }}>Continue where you left off</p>
+            <p style={{ ...S.heading, fontSize: "1.15rem", color: C.text }}>{sessionResumeInfo.ref}</p>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, color: C.textDim, fontSize: 13 }}>
               <Icons.Play />
               <span>Tap to resume</span>
             </div>
@@ -792,9 +864,9 @@ export default function ScriptureMemorizeApp() {
       )}
 
       {/* Search */}
-      <div className="mx-5 mb-5">
-        <div className="relative">
-          <div className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-500">
+      <div style={{ margin: "0 20px 20px" }}>
+        <div style={{ position: "relative" }}>
+          <div style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: C.textFaint }}>
             <Icons.Search />
           </div>
           <input
@@ -802,42 +874,64 @@ export default function ScriptureMemorizeApp() {
             placeholder="Search verses or references..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-3 rounded-xl bg-stone-800/40 border border-stone-700/30 text-stone-200 placeholder-stone-500 outline-none focus:border-amber-700/50 transition-colors text-sm"
+            style={{ width: "100%", paddingLeft: 40, paddingRight: 16, paddingTop: 12, paddingBottom: 12, borderRadius: 12, background: "rgba(255,248,240,0.03)", border: `1px solid rgba(255,248,240,0.06)`, color: C.text, fontSize: 14, outline: "none", fontFamily: "inherit" }}
           />
         </div>
         {searchResults.length > 0 && (
-          <div className="mt-2 bg-stone-900/90 border border-stone-700/30 rounded-xl max-h-64 overflow-y-auto">
+          <div style={{ marginTop: 8, background: "rgba(15,13,10,0.95)", border: `1px solid ${C.cardBorder}`, borderRadius: 12, maxHeight: 256, overflowY: "auto" }}>
             {searchResults.map((r, i) => (
               <button
                 key={i}
                 onClick={() => { startPractice(r.book, r.chapter, r.verse); setSearchQuery(""); }}
-                className="w-full p-3 text-left border-b border-stone-800/50 last:border-0 hover:bg-stone-800/40 transition-colors"
+                style={{ width: "100%", padding: 12, textAlign: "left", borderBottom: i < searchResults.length - 1 ? `1px solid rgba(255,248,240,0.04)` : "none", background: "transparent", border: "none", cursor: "pointer", color: C.text }}
               >
-                <p className="text-amber-500/80 text-xs font-medium">{r.ref}</p>
-                <p className="text-stone-300 text-sm mt-0.5 line-clamp-2">{r.text}</p>
+                <p style={{ color: C.accent, fontSize: 11, fontWeight: 500 }}>{r.ref}</p>
+                <p style={{ color: C.textDim, fontSize: 13, marginTop: 2 }} className="line-clamp-2">{r.text}</p>
               </button>
             ))}
           </div>
         )}
       </div>
 
-      {/* Quick Start */}
-      <div className="px-5 mb-4">
-        <h2 className="text-sm tracking-[0.2em] uppercase text-stone-500 mb-3 font-medium">Popular Passages</h2>
-        <div className="space-y-1">
+      {/* Begin — Featured Passages */}
+      <div style={{ padding: "0 20px", marginBottom: 24 }}>
+        <h2 style={{ ...S.label, marginBottom: 12 }}>Begin</h2>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {FEATURED_PASSAGES.map((fp, i) => (
+            <button
+              key={i}
+              onClick={() => startPractice(fp.book, fp.chapter, fp.verse || null)}
+              style={{ ...S.card, padding: "18px 16px", textAlign: "left", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, transition: "transform 0.15s" }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <p style={{ ...S.heading, fontSize: "1.05rem", color: C.text, marginBottom: 6 }}>{fp.label}</p>
+                <p style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 13, color: C.textDim, fontStyle: "italic", lineHeight: 1.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {fp.preview}
+                </p>
+              </div>
+              <div style={{ width: 36, height: 36, borderRadius: "50%", background: C.accentGlow, display: "flex", alignItems: "center", justifyContent: "center", color: C.accent, flexShrink: 0 }}>
+                <Icons.Play />
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Popular Passages */}
+      <div style={{ padding: "0 20px", marginBottom: 20 }}>
+        <h2 style={{ ...S.label, marginBottom: 12 }}>Popular Passages</h2>
+        <div style={{ display: "flex", flexDirection: "column" }}>
           {POPULAR_PASSAGES.map((p, i) => (
             <button
               key={i}
               onClick={() => startPractice(p.book, p.chapter, p.verse || null)}
-              className="w-full flex items-center justify-between py-2.5 px-3 rounded-lg hover:bg-stone-800/30 transition-colors group"
+              style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 8px", borderRadius: 8, background: "transparent", border: "none", cursor: "pointer", borderBottom: i < POPULAR_PASSAGES.length - 1 ? `1px solid rgba(255,248,240,0.03)` : "none" }}
             >
-              <div className="flex items-center gap-3">
-                <span className="text-amber-600/50 text-xs w-24 text-left shrink-0">{p.ref}</span>
-                <span className="text-stone-300 text-sm" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
-                  {p.label}
-                </span>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ color: C.accentDim, fontSize: 11, width: 95, textAlign: "left", flexShrink: 0 }}>{p.ref}</span>
+                <span style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 14, color: C.textDim }}>{p.label}</span>
               </div>
-              <span className="text-stone-600 group-hover:text-stone-400 transition-colors"><Icons.ChevronRight /></span>
+              <span style={{ color: C.textFaint }}><Icons.ChevronRight /></span>
             </button>
           ))}
         </div>
@@ -845,12 +939,12 @@ export default function ScriptureMemorizeApp() {
 
       {/* Favorites */}
       {favorites.length > 0 && (
-        <div className="px-5 mb-4">
-          <h2 className="text-sm tracking-[0.2em] uppercase text-stone-500 mb-3 font-medium flex items-center gap-2">
-            <span className="text-amber-600"><Icons.Heart filled={true}/></span>
+        <div style={{ padding: "0 20px", marginBottom: 24 }}>
+          <h2 style={{ ...S.label, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ color: C.accent }}><Icons.Heart filled={true} /></span>
             Favorites
           </h2>
-          <div className="space-y-2">
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {favorites.slice(0, 5).map((ref, i) => (
               <button
                 key={i}
@@ -858,115 +952,118 @@ export default function ScriptureMemorizeApp() {
                   const parts = ref.match(/(.+?)\s+(\d+):?(\d+)?/);
                   if (parts) startPractice(parts[1], Number(parts[2]), parts[3] ? Number(parts[3]) : null);
                 }}
-                className="w-full p-3 rounded-xl bg-stone-800/30 border border-stone-700/20 text-left hover:bg-stone-800/50 transition-colors flex items-center justify-between"
+                style={{ ...S.card, width: "100%", padding: 12, textAlign: "left", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between" }}
               >
-                <span className="text-stone-200 text-sm">{ref}</span>
-                <Icons.ChevronRight />
+                <span style={{ color: C.text, fontSize: 14 }}>{ref}</span>
+                <span style={{ color: C.textFaint }}><Icons.ChevronRight /></span>
               </button>
             ))}
           </div>
         </div>
       )}
 
-      {/* Bottom nav */}
+      <div style={{ height: 80 }} />
       {renderBottomNav()}
     </div>
   );
 
   // BROWSE
   const renderBrowse = () => (
-    <div className="flex flex-col min-h-screen" style={{ background: "linear-gradient(165deg, #1a1410 0%, #0d0b09 40%, #151210 100%)" }}>
-      <div className="px-5 pt-6 pb-3">
-        <div className="flex items-center gap-3">
+    <div style={S.page}>
+      <div style={{ padding: "24px 20px 12px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           {(selectedBook || selectedChapter) && (
             <button
               onClick={() => { if (selectedChapter) setSelectedChapter(null); else setSelectedBook(null); }}
-              className="w-9 h-9 rounded-full bg-stone-800/50 flex items-center justify-center text-stone-400 hover:text-stone-200 transition-colors"
+              style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(255,248,240,0.04)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: C.textDim, cursor: "pointer" }}
             >
               <Icons.ArrowLeft />
             </button>
           )}
-          <h1 className="text-2xl font-light text-stone-100" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
+          <h1 style={{ ...S.heading, fontSize: "1.5rem", color: C.text }}>
             {selectedChapter ? `${selectedBook} ${selectedChapter}` : selectedBook || "Library"}
           </h1>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-5 pb-24">
+      <div style={{ flex: 1, overflowY: "auto", padding: "0 20px", paddingBottom: 96 }}>
+        {/* No book selected: show OT / NT sections */}
         {!selectedBook && (
-          <div className="space-y-1.5">
-            {books.map(book => (
-              <button
-                key={book}
-                onClick={() => setSelectedBook(book)}
-                className="w-full p-3.5 rounded-xl bg-stone-800/20 border border-stone-700/15 text-left hover:bg-stone-800/40 transition-all flex items-center justify-between group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-amber-900/20 flex items-center justify-center text-amber-600/60">
-                    <Icons.Book />
-                  </div>
-                  <span className="text-stone-200">{book}</span>
-                </div>
-                <span className="text-stone-600 group-hover:text-stone-400 transition-colors"><Icons.ChevronRight /></span>
-              </button>
-            ))}
-          </div>
-        )}
-
-        {selectedBook && !selectedChapter && (
           <div>
-            {/* Chapter number input */}
-            <div className="mb-5">
-              <p className="text-stone-400 text-xs tracking-[0.15em] uppercase mb-2">Enter chapter number</p>
-              <form onSubmit={(e) => { e.preventDefault(); const n = parseInt(browseChapterNum); if (n > 0) { setSelectedChapter(n); setBrowseChapterNum(""); } }} className="flex gap-2">
-                <input
-                  type="number"
-                  min="1"
-                  placeholder="e.g. 3"
-                  value={browseChapterNum}
-                  onChange={(e) => setBrowseChapterNum(e.target.value)}
-                  className="flex-1 px-4 py-3 rounded-xl bg-stone-800/40 border border-stone-700/30 text-stone-200 placeholder-stone-500 outline-none focus:border-amber-700/50 transition-colors text-sm"
-                />
+            {/* Old Testament */}
+            <h3 style={{ ...S.label, color: C.accentDim, marginBottom: 8, marginTop: 4 }}>Old Testament</h3>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 10px", marginBottom: 24 }}>
+              {OT_BOOKS.map(book => (
                 <button
-                  type="submit"
-                  className="px-5 py-3 rounded-xl text-sm font-medium transition-all hover:scale-[1.02] active:scale-[0.98]"
-                  style={{ background: "linear-gradient(135deg, #92400e, #b45309)", color: "#fff" }}
+                  key={book}
+                  onClick={() => setSelectedBook(book)}
+                  style={{ padding: "6px 10px", borderRadius: 8, background: "transparent", border: "none", color: C.textDim, fontSize: 13, cursor: "pointer", transition: "color 0.15s" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = C.text; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}
                 >
-                  Go
+                  {book}
                 </button>
-              </form>
+              ))}
             </div>
 
-            {/* Quick-access: embedded chapters */}
-            {KJV_DATA[selectedBook] && (
-              <>
-                <p className="text-stone-400 text-xs tracking-[0.15em] uppercase mb-2">Saved locally</p>
-                <div className="grid grid-cols-4 gap-2.5">
-                  {Object.keys(KJV_DATA[selectedBook]).sort((a,b) => Number(a) - Number(b)).map(ch => (
-                    <button
-                      key={ch}
-                      onClick={() => setSelectedChapter(Number(ch))}
-                      className="aspect-square rounded-xl bg-stone-800/30 border border-stone-700/20 flex items-center justify-center text-stone-300 text-lg hover:bg-amber-900/20 hover:border-amber-800/30 hover:text-amber-400 transition-all"
-                      style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}
-                    >
-                      {ch}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
+            {/* New Testament */}
+            <h3 style={{ ...S.label, color: C.accentDim, marginBottom: 8 }}>New Testament</h3>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 10px", marginBottom: 24 }}>
+              {NT_BOOKS.map(book => (
+                <button
+                  key={book}
+                  onClick={() => setSelectedBook(book)}
+                  style={{ padding: "6px 10px", borderRadius: 8, background: "transparent", border: "none", color: C.textDim, fontSize: 13, cursor: "pointer", transition: "color 0.15s" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = C.text; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}
+                >
+                  {book}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
+        {/* Book selected, no chapter: show chapter number grid */}
+        {selectedBook && !selectedChapter && (
+          <div>
+            <p style={{ ...S.label, color: C.textDim, marginBottom: 12 }}>
+              {BOOK_CHAPTERS[selectedBook]} Chapters
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
+              {Array.from({ length: BOOK_CHAPTERS[selectedBook] || 0 }, (_, i) => i + 1).map(ch => {
+                const hasLocal = KJV_DATA[selectedBook]?.[ch];
+                return (
+                  <button
+                    key={ch}
+                    onClick={() => setSelectedChapter(ch)}
+                    style={{
+                      aspectRatio: "1", borderRadius: 10,
+                      background: hasLocal ? C.accentGlow : C.card,
+                      border: `1px solid ${hasLocal ? C.accentBorder : C.cardBorder}`,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      color: hasLocal ? C.accent : C.textDim,
+                      fontSize: 15, fontFamily: "'Cormorant Garamond', Georgia, serif",
+                      cursor: "pointer", transition: "all 0.15s",
+                    }}
+                  >
+                    {ch}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Chapter selected: practice button + verses */}
         {selectedBook && selectedChapter && (
-          <div className="space-y-3">
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <button
               onClick={() => startPractice(selectedBook, selectedChapter)}
-              className="w-full p-4 rounded-xl text-center transition-all hover:scale-[1.01] active:scale-[0.99]"
-              style={{ background: "linear-gradient(135deg, #92400e25, #78350f35)", border: "1px solid #92400e30" }}
+              style={{ width: "100%", padding: 16, borderRadius: 14, textAlign: "center", background: C.accentGlow, border: `1px solid ${C.accentBorder}`, cursor: "pointer", transition: "transform 0.15s" }}
             >
-              <p className="text-amber-400 font-medium">Practice Entire Chapter</p>
-              <p className="text-stone-400 text-xs mt-1">Fetches full chapter from KJV</p>
+              <p style={{ color: C.accent, fontWeight: 500, fontSize: 15 }}>Practice Full Chapter</p>
+              <p style={{ color: C.textDim, fontSize: 11, marginTop: 4 }}>Fetches full chapter from KJV</p>
             </button>
 
             {/* Show embedded verses if available */}
@@ -975,31 +1072,34 @@ export default function ScriptureMemorizeApp() {
               const isFav = favorites.includes(ref);
               const prog = progress[ref];
               return (
-                <div key={v} className="p-4 rounded-xl bg-stone-800/20 border border-stone-700/15">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <span className="text-amber-600/70 text-xs font-medium tracking-wide">v. {v}</span>
+                <div key={v} style={{ ...S.card, padding: 16 }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                        <span style={{ color: C.accentDim, fontSize: 11, fontWeight: 500, letterSpacing: "0.05em" }}>v. {v}</span>
                         {prog?.status === "memorized" && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-900/30 text-emerald-400 border border-emerald-800/30">Memorized</span>
+                          <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 99, background: C.greenBg, color: C.green, border: `1px solid ${C.greenBorder}` }}>Memorized</span>
                         )}
                         {prog?.status === "learning" && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-900/30 text-amber-400 border border-amber-800/30">Learning</span>
+                          <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 99, background: C.amberBg, color: C.accent, border: `1px solid ${C.amberBorder}` }}>Learning</span>
                         )}
                       </div>
-                      <p className="text-stone-300 text-sm leading-relaxed" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
+                      <p style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", color: C.textDim, fontSize: 14, lineHeight: 1.6 }}>
                         {text}
                       </p>
                     </div>
-                    <div className="flex flex-col items-center gap-2 shrink-0">
-                      <button onClick={() => toggleFavorite(ref)} className={`${isFav ? "text-amber-500" : "text-stone-600"} hover:text-amber-400 transition-colors`}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                      <button
+                        onClick={() => toggleFavorite(ref)}
+                        style={{ background: "none", border: "none", color: isFav ? C.accent : C.textFaint, cursor: "pointer", padding: 0 }}
+                      >
                         <Icons.Heart filled={isFav} />
                       </button>
                     </div>
                   </div>
                   <button
                     onClick={() => startPractice(selectedBook, selectedChapter, Number(v))}
-                    className="mt-3 w-full py-2 rounded-lg bg-stone-700/30 text-stone-300 text-sm hover:bg-stone-700/50 transition-colors flex items-center justify-center gap-2"
+                    style={{ marginTop: 12, width: "100%", padding: "8px 0", borderRadius: 8, background: "rgba(255,248,240,0.03)", border: `1px solid ${C.cardBorder}`, color: C.textDim, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
                   >
                     <Icons.Play /> Practice
                   </button>
@@ -1020,45 +1120,39 @@ export default function ScriptureMemorizeApp() {
     const matchPct = alignmentResult ? Math.round((alignmentResult.matchedUpTo / alignmentResult.total) * 100) : 0;
 
     return (
-      <div className="flex flex-col min-h-screen" style={{ background: "linear-gradient(165deg, #12100d 0%, #0a0908 50%, #110f0c 100%)" }}>
+      <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh", background: "linear-gradient(170deg, #12100d 0%, #0a0908 50%, #110f0c 100%)" }}>
         {/* Top bar */}
-        <div className="px-5 pt-5 pb-2 flex items-center justify-between">
+        <div style={{ padding: "20px 20px 8px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <button
             onClick={() => { stopListening(); stopSpeaking(); setView("home"); }}
-            className="w-9 h-9 rounded-full bg-stone-800/50 flex items-center justify-center text-stone-400 hover:text-stone-200 transition-colors"
+            style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(255,248,240,0.04)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: C.textDim, cursor: "pointer" }}
           >
             <Icons.X />
           </button>
-          <div className="text-center">
-            <p className="text-amber-600/80 text-xs tracking-[0.15em] uppercase font-medium">{practiceRef}</p>
+          <div style={{ textAlign: "center" }}>
+            <p style={{ ...S.label, color: C.accentDim, fontSize: 11 }}>{practiceRef}</p>
           </div>
           <button
             onClick={() => toggleFavorite(practiceRef)}
-            className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${favorites.includes(practiceRef) ? "text-amber-500" : "text-stone-500 hover:text-stone-300"}`}
+            style={{ width: 36, height: 36, borderRadius: "50%", background: "none", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: favorites.includes(practiceRef) ? C.accent : C.textFaint, cursor: "pointer" }}
           >
             <Icons.Heart filled={favorites.includes(practiceRef)} />
           </button>
         </div>
 
         {/* Progress bar */}
-        <div className="mx-5 mb-4">
-          <div className="h-1 bg-stone-800 rounded-full overflow-hidden">
-            <div
-              className="h-full rounded-full transition-all duration-500"
-              style={{
-                width: `${completionPct}%`,
-                background: "linear-gradient(90deg, #b45309, #d97706)"
-              }}
-            />
+        <div style={{ margin: "0 20px 16px" }}>
+          <div style={{ height: 3, background: "rgba(255,248,240,0.04)", borderRadius: 99, overflow: "hidden" }}>
+            <div style={{ height: "100%", borderRadius: 99, transition: "width 0.5s ease", width: `${completionPct}%`, background: `linear-gradient(90deg, ${C.accentDim}, ${C.accent})` }} />
           </div>
-          <div className="flex justify-between mt-1.5">
-            <span className="text-stone-500 text-[10px]">Segment {currentSegment + 1} of {practiceSegments.length}</span>
-            <span className="text-stone-500 text-[10px]">{completionPct}%</span>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
+            <span style={{ color: C.textFaint, fontSize: 10 }}>Segment {currentSegment + 1} of {practiceSegments.length}</span>
+            <span style={{ color: C.textFaint, fontSize: 10 }}>{completionPct}%</span>
           </div>
         </div>
 
         {/* Mode selector */}
-        <div className="mx-5 mb-5 flex gap-1.5 p-1 rounded-xl bg-stone-800/30">
+        <div style={{ margin: "0 20px 20px", display: "flex", gap: 4, padding: 4, borderRadius: 14, background: "rgba(255,248,240,0.02)" }}>
           {[
             { id: "listen", label: "Listen", icon: <Icons.Volume /> },
             { id: "speak-with", label: "Speak With", icon: <Icons.Repeat /> },
@@ -1075,44 +1169,45 @@ export default function ScriptureMemorizeApp() {
                 setAlignmentResult(null);
                 setCoachMessage("");
               }}
-              className={`flex-1 py-2 px-1.5 rounded-lg text-[11px] font-medium transition-all flex flex-col items-center gap-1 ${
-                practiceMode === mode.id
-                  ? "bg-amber-900/40 text-amber-400 border border-amber-800/30"
-                  : "text-stone-500 hover:text-stone-300"
-              }`}
+              style={{
+                flex: 1, padding: "8px 4px", borderRadius: 10, fontSize: 10, fontWeight: 500,
+                display: "flex", flexDirection: "column", alignItems: "center", gap: 4, cursor: "pointer",
+                transition: "all 0.2s", border: "none",
+                background: practiceMode === mode.id ? C.accentGlow : "transparent",
+                color: practiceMode === mode.id ? C.accent : C.textFaint,
+                ...(practiceMode === mode.id ? { border: `1px solid ${C.accentBorder}` } : { border: "1px solid transparent" }),
+              }}
             >
-              <span className="opacity-70">{mode.icon}</span>
+              <span style={{ opacity: 0.7 }}>{mode.icon}</span>
               {mode.label}
             </button>
           ))}
         </div>
 
         {/* Scripture display */}
-        <div className="flex-1 px-5 flex flex-col items-center justify-center">
-          <div className="max-w-lg w-full text-center">
+        <div style={{ flex: 1, padding: "0 20px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ maxWidth: 480, width: "100%", textAlign: "center" }}>
             {renderHighlightedText()}
-            
+
             {/* Match indicator */}
             {(practiceMode === "recall" || practiceMode === "faded") && alignmentResult && (
-              <div className="mt-6">
-                <div className="h-1.5 bg-stone-800 rounded-full overflow-hidden max-w-xs mx-auto">
-                  <div
-                    className="h-full rounded-full transition-all duration-300"
-                    style={{
-                      width: `${matchPct}%`,
-                      background: matchPct >= 90 ? "#16a34a" : matchPct >= 60 ? "#d97706" : "#dc2626"
-                    }}
-                  />
+              <div style={{ marginTop: 24 }}>
+                <div style={{ height: 5, background: "rgba(255,248,240,0.04)", borderRadius: 99, overflow: "hidden", maxWidth: 280, margin: "0 auto" }}>
+                  <div style={{
+                    height: "100%", borderRadius: 99, transition: "width 0.3s ease",
+                    width: `${matchPct}%`,
+                    background: matchPct >= 90 ? C.green : matchPct >= 60 ? C.accent : C.red,
+                  }} />
                 </div>
-                <p className="text-stone-500 text-xs mt-1.5">{matchPct}% matched</p>
+                <p style={{ color: C.textFaint, fontSize: 12, marginTop: 6 }}>{matchPct}% matched</p>
               </div>
             )}
 
             {/* Spoken text display */}
             {spokenText && (practiceMode === "recall" || practiceMode === "faded") && (
-              <div className="mt-5 p-3 rounded-xl bg-stone-800/20 border border-stone-700/15">
-                <p className="text-stone-400 text-xs tracking-wider uppercase mb-1">What I heard</p>
-                <p className="text-stone-300 text-sm italic">{spokenText}</p>
+              <div style={{ marginTop: 20, padding: 12, borderRadius: 12, background: C.card, border: `1px solid ${C.cardBorder}` }}>
+                <p style={{ ...S.label, marginBottom: 4 }}>What I heard</p>
+                <p style={{ color: C.textDim, fontSize: 13, fontStyle: "italic" }}>{spokenText}</p>
               </div>
             )}
           </div>
@@ -1120,21 +1215,21 @@ export default function ScriptureMemorizeApp() {
 
         {/* Coach message */}
         {coachMessage && (
-          <div className="mx-5 mb-3 p-3.5 rounded-xl" style={{ background: "linear-gradient(135deg, #1c1917, #1a1510)", border: "1px solid #292524" }}>
-            <p className="text-stone-300 text-sm leading-relaxed text-center" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
+          <div style={{ margin: "0 20px 12px", padding: 14, borderRadius: 12, background: "rgba(255,248,240,0.02)", border: `1px solid ${C.cardBorder}` }}>
+            <p style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", color: C.textDim, fontSize: 14, lineHeight: 1.5, textAlign: "center" }}>
               {coachMessage}
             </p>
           </div>
         )}
 
         {/* Controls */}
-        <div className="px-5 pb-8">
+        <div style={{ padding: "0 20px 32px" }}>
           {/* Navigation */}
-          <div className="flex items-center justify-center gap-4 mb-4">
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16, marginBottom: 16 }}>
             <button
               onClick={prevSegment}
               disabled={currentSegment === 0}
-              className="w-10 h-10 rounded-full bg-stone-800/40 flex items-center justify-center text-stone-400 hover:text-stone-200 disabled:opacity-30 transition-all"
+              style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(255,248,240,0.04)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: C.textDim, cursor: currentSegment === 0 ? "default" : "pointer", opacity: currentSegment === 0 ? 0.3 : 1 }}
             >
               <Icons.SkipBack />
             </button>
@@ -1143,12 +1238,11 @@ export default function ScriptureMemorizeApp() {
             {practiceMode === "listen" && (
               <button
                 onClick={() => isSpeaking ? stopSpeaking() : speak(currentSegmentText)}
-                className="w-16 h-16 rounded-full flex items-center justify-center transition-all hover:scale-105 active:scale-95"
                 style={{
-                  background: isSpeaking
-                    ? "linear-gradient(135deg, #7c2d12, #9a3412)"
-                    : "linear-gradient(135deg, #92400e, #b45309)",
-                  boxShadow: "0 4px 20px rgba(180, 83, 9, 0.3)"
+                  width: 64, height: 64, borderRadius: "50%", border: "none", display: "flex", alignItems: "center", justifyContent: "center",
+                  cursor: "pointer", transition: "transform 0.15s", color: "#fff",
+                  background: isSpeaking ? "linear-gradient(135deg, #7c2d12, #9a3412)" : `linear-gradient(135deg, ${C.accentDim}, ${C.accent})`,
+                  boxShadow: `0 4px 20px rgba(200,149,108,0.3)`,
                 }}
               >
                 {isSpeaking ? <Icons.Pause /> : <Icons.Play />}
@@ -1161,10 +1255,11 @@ export default function ScriptureMemorizeApp() {
                   speak(currentSegmentText, 0.7);
                   setTimeout(() => startListening(), 500);
                 }}
-                className="w-16 h-16 rounded-full flex items-center justify-center transition-all hover:scale-105 active:scale-95"
                 style={{
-                  background: "linear-gradient(135deg, #92400e, #b45309)",
-                  boxShadow: "0 4px 20px rgba(180, 83, 9, 0.3)"
+                  width: 64, height: 64, borderRadius: "50%", border: "none", display: "flex", alignItems: "center", justifyContent: "center",
+                  cursor: "pointer", transition: "transform 0.15s", color: "#fff",
+                  background: `linear-gradient(135deg, ${C.accentDim}, ${C.accent})`,
+                  boxShadow: `0 4px 20px rgba(200,149,108,0.3)`,
                 }}
               >
                 <Icons.Volume />
@@ -1174,16 +1269,12 @@ export default function ScriptureMemorizeApp() {
             {(practiceMode === "recall" || practiceMode === "faded") && (
               <button
                 onClick={() => isListening ? stopListening() : startListening()}
-                className={`w-16 h-16 rounded-full flex items-center justify-center transition-all hover:scale-105 active:scale-95 ${
-                  isListening ? "animate-pulse" : ""
-                }`}
+                className={isListening ? "animate-pulse" : ""}
                 style={{
-                  background: isListening
-                    ? "linear-gradient(135deg, #dc2626, #ef4444)"
-                    : "linear-gradient(135deg, #92400e, #b45309)",
-                  boxShadow: isListening
-                    ? "0 4px 30px rgba(220, 38, 38, 0.4)"
-                    : "0 4px 20px rgba(180, 83, 9, 0.3)"
+                  width: 64, height: 64, borderRadius: "50%", border: "none", display: "flex", alignItems: "center", justifyContent: "center",
+                  cursor: "pointer", transition: "transform 0.15s", color: "#fff",
+                  background: isListening ? "linear-gradient(135deg, #dc2626, #ef4444)" : `linear-gradient(135deg, ${C.accentDim}, ${C.accent})`,
+                  boxShadow: isListening ? "0 4px 30px rgba(220,38,38,0.4)" : `0 4px 20px rgba(200,149,108,0.3)`,
                 }}
               >
                 {isListening ? <Icons.MicOff /> : <Icons.Mic />}
@@ -1193,53 +1284,45 @@ export default function ScriptureMemorizeApp() {
             <button
               onClick={nextSegment}
               disabled={currentSegment >= practiceSegments.length - 1}
-              className="w-10 h-10 rounded-full bg-stone-800/40 flex items-center justify-center text-stone-400 hover:text-stone-200 disabled:opacity-30 transition-all"
+              style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(255,248,240,0.04)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: C.textDim, cursor: currentSegment >= practiceSegments.length - 1 ? "default" : "pointer", opacity: currentSegment >= practiceSegments.length - 1 ? 0.3 : 1 }}
             >
               <Icons.SkipFwd />
             </button>
           </div>
 
           {/* Secondary controls */}
-          <div className="flex items-center justify-center gap-3">
-            <button
-              onClick={requestHelp}
-              className="px-4 py-2 rounded-lg bg-stone-800/30 text-stone-400 text-xs tracking-wider hover:text-stone-200 hover:bg-stone-800/50 transition-all uppercase"
-            >
-              Help me
-            </button>
-            <button
-              onClick={() => speak(currentSegmentText, 0.6)}
-              className="px-4 py-2 rounded-lg bg-stone-800/30 text-stone-400 text-xs tracking-wider hover:text-stone-200 hover:bg-stone-800/50 transition-all uppercase"
-            >
-              Read slowly
-            </button>
-            <button
-              onClick={() => {
-                setSpokenText("");
-                setAlignmentResult(null);
-                setCoachMessage("Let's try that segment again.");
-              }}
-              className="px-4 py-2 rounded-lg bg-stone-800/30 text-stone-400 text-xs tracking-wider hover:text-stone-200 hover:bg-stone-800/50 transition-all uppercase"
-            >
-              Reset
-            </button>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+            {[
+              { label: "Help me", action: requestHelp },
+              { label: "Read slowly", action: () => speak(currentSegmentText, 0.6) },
+              { label: "Reset", action: () => { setSpokenText(""); setAlignmentResult(null); setCoachMessage("Let's try that segment again."); } },
+            ].map((btn, i) => (
+              <button
+                key={i}
+                onClick={btn.action}
+                style={{ padding: "8px 14px", borderRadius: 8, background: "rgba(255,248,240,0.03)", border: `1px solid ${C.cardBorder}`, color: C.textDim, fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", cursor: "pointer", transition: "color 0.15s" }}
+              >
+                {btn.label}
+              </button>
+            ))}
           </div>
 
           {/* Continuous mode toggle + TTS speed */}
-          <div className="mt-4 flex items-center justify-center gap-5">
+          <div style={{ marginTop: 16, display: "flex", alignItems: "center", justifyContent: "center", gap: 20 }}>
             <button
               onClick={() => setContinuousMode(prev => !prev)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] tracking-wider uppercase transition-all ${
-                continuousMode
-                  ? "bg-amber-900/30 text-amber-400 border border-amber-800/30"
-                  : "bg-stone-800/30 text-stone-500 border border-stone-700/20"
-              }`}
+              style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 8, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", cursor: "pointer", transition: "all 0.2s",
+                background: continuousMode ? C.accentGlow : "rgba(255,248,240,0.02)",
+                color: continuousMode ? C.accent : C.textFaint,
+                border: `1px solid ${continuousMode ? C.accentBorder : C.cardBorder}`,
+              }}
             >
               <Icons.Repeat />
               Continuous
             </button>
-            <div className="flex items-center gap-2">
-              <span className="text-stone-500 text-[10px] tracking-wider">SLOW</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ color: C.textFaint, fontSize: 10, letterSpacing: "0.1em" }}>SLOW</span>
               <input
                 type="range"
                 min="0.5"
@@ -1247,9 +1330,9 @@ export default function ScriptureMemorizeApp() {
                 step="0.05"
                 value={ttsRate}
                 onChange={(e) => setTtsRate(parseFloat(e.target.value))}
-                className="w-24"
+                style={{ width: 96 }}
               />
-              <span className="text-stone-500 text-[10px] tracking-wider">FAST</span>
+              <span style={{ color: C.textFaint, fontSize: 10, letterSpacing: "0.1em" }}>FAST</span>
             </div>
           </div>
         </div>
@@ -1265,41 +1348,41 @@ export default function ScriptureMemorizeApp() {
     const totalCount = entries.length;
 
     return (
-      <div className="flex flex-col min-h-screen" style={{ background: "linear-gradient(165deg, #1a1410 0%, #0d0b09 40%, #151210 100%)" }}>
-        <div className="px-5 pt-6 pb-4">
-          <h1 className="text-2xl font-light text-stone-100" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
+      <div style={S.page}>
+        <div style={{ padding: "24px 20px 16px" }}>
+          <h1 style={{ ...S.heading, fontSize: "1.5rem", color: C.text }}>
             Your Progress
           </h1>
         </div>
 
         {/* Stats */}
-        <div className="mx-5 mb-5 grid grid-cols-3 gap-3">
+        <div style={{ margin: "0 20px 20px", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
           {[
-            { label: "Memorized", value: memorizedCount, color: "#16a34a" },
-            { label: "Learning", value: learningCount, color: "#d97706" },
-            { label: "Total", value: totalCount, color: "#a8a29e" },
+            { label: "Memorized", value: memorizedCount, color: C.green },
+            { label: "Learning", value: learningCount, color: C.accent },
+            { label: "Total", value: totalCount, color: C.textDim },
           ].map((stat, i) => (
-            <div key={i} className="p-3 rounded-xl bg-stone-800/20 border border-stone-700/15 text-center">
-              <p className="text-2xl font-light" style={{ color: stat.color, fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
+            <div key={i} style={{ ...S.card, padding: 12, textAlign: "center" }}>
+              <p style={{ fontSize: "1.5rem", fontWeight: 300, color: stat.color, fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
                 {stat.value}
               </p>
-              <p className="text-[10px] tracking-[0.15em] uppercase text-stone-500 mt-0.5">{stat.label}</p>
+              <p style={{ ...S.label, marginTop: 2 }}>{stat.label}</p>
             </div>
           ))}
         </div>
 
         {/* Entries */}
-        <div className="flex-1 overflow-y-auto px-5 pb-24">
+        <div style={{ flex: 1, overflowY: "auto", padding: "0 20px", paddingBottom: 96 }}>
           {entries.length === 0 ? (
-            <div className="text-center py-16">
-              <div className="text-stone-600 mb-3">
+            <div style={{ textAlign: "center", paddingTop: 64 }}>
+              <div style={{ color: C.textFaint, marginBottom: 12, display: "flex", justifyContent: "center" }}>
                 <Icons.Book />
               </div>
-              <p className="text-stone-400 text-sm">No passages practiced yet.</p>
-              <p className="text-stone-500 text-xs mt-1">Choose a passage to begin your journey.</p>
+              <p style={{ color: C.textDim, fontSize: 14 }}>No passages practiced yet.</p>
+              <p style={{ color: C.textFaint, fontSize: 12, marginTop: 4 }}>Choose a passage to begin your journey.</p>
             </div>
           ) : (
-            <div className="space-y-2">
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {entries.map(([ref, data]) => (
                 <button
                   key={ref}
@@ -1307,27 +1390,29 @@ export default function ScriptureMemorizeApp() {
                     const parts = ref.match(/(.+?)\s+(\d+):?(\d+)?/);
                     if (parts) startPractice(parts[1], Number(parts[2]), parts[3] ? Number(parts[3]) : null);
                   }}
-                  className="w-full p-3.5 rounded-xl bg-stone-800/20 border border-stone-700/15 text-left hover:bg-stone-800/30 transition-all"
+                  style={{ ...S.card, width: "100%", padding: 14, textAlign: "left", cursor: "pointer", transition: "background 0.15s" }}
                 >
-                  <div className="flex items-center justify-between">
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <div>
-                      <p className="text-stone-200 text-sm">{ref}</p>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${
-                          data.status === "memorized"
-                            ? "bg-emerald-900/30 text-emerald-400 border-emerald-800/30"
+                      <p style={{ color: C.text, fontSize: 14 }}>{ref}</p>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+                        <span style={{
+                          fontSize: 10, padding: "2px 6px", borderRadius: 99,
+                          ...(data.status === "memorized"
+                            ? { background: C.greenBg, color: C.green, border: `1px solid ${C.greenBorder}` }
                             : data.status === "learning"
-                            ? "bg-amber-900/30 text-amber-400 border-amber-800/30"
-                            : "bg-stone-800/30 text-stone-400 border-stone-700/30"
-                        }`}>
+                            ? { background: C.amberBg, color: C.accent, border: `1px solid ${C.amberBorder}` }
+                            : { background: C.card, color: C.textDim, border: `1px solid ${C.cardBorder}` }
+                          ),
+                        }}>
                           {data.status === "memorized" ? "Memorized" : data.status === "learning" ? "Learning" : "In Progress"}
                         </span>
                         {data.accuracy && (
-                          <span className="text-stone-500 text-[10px]">{data.accuracy}% accuracy</span>
+                          <span style={{ color: C.textFaint, fontSize: 10 }}>{data.accuracy}% accuracy</span>
                         )}
                       </div>
                     </div>
-                    <Icons.ChevronRight />
+                    <span style={{ color: C.textFaint }}><Icons.ChevronRight /></span>
                   </div>
                 </button>
               ))}
@@ -1342,9 +1427,9 @@ export default function ScriptureMemorizeApp() {
 
   // Bottom navigation
   const renderBottomNav = () => (
-    <div className="fixed bottom-0 left-0 right-0 z-50">
-      <div className="h-px" style={{ background: "linear-gradient(90deg, transparent, #44403c40, transparent)" }} />
-      <div className="flex items-center justify-around py-2 pb-5" style={{ background: "linear-gradient(180deg, #1a1410e0, #0d0b09)" }}>
+    <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 50 }}>
+      <div style={{ height: 1, background: `linear-gradient(90deg, transparent, rgba(200,149,108,0.1), transparent)` }} />
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-around", padding: "8px 0 20px", background: `linear-gradient(180deg, rgba(15,13,10,0.9), ${C.bg})`, backdropFilter: "blur(12px)" }}>
         {[
           { id: "home", label: "Home", icon: <Icons.Home /> },
           { id: "browse", label: "Library", icon: <Icons.Book /> },
@@ -1353,12 +1438,14 @@ export default function ScriptureMemorizeApp() {
           <button
             key={tab.id}
             onClick={() => { setView(tab.id); if (tab.id === "browse") { setSelectedBook(null); setSelectedChapter(null); } }}
-            className={`flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-xl transition-all ${
-              view === tab.id ? "text-amber-500" : "text-stone-500 hover:text-stone-300"
-            }`}
+            style={{
+              display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "6px 20px", borderRadius: 12,
+              background: "none", border: "none", cursor: "pointer", transition: "color 0.2s",
+              color: view === tab.id ? C.accent : C.textFaint,
+            }}
           >
             {tab.icon}
-            <span className="text-[10px] tracking-wider">{tab.label}</span>
+            <span style={{ fontSize: 10, letterSpacing: "0.05em" }}>{tab.label}</span>
           </button>
         ))}
       </div>
@@ -1369,21 +1456,22 @@ export default function ScriptureMemorizeApp() {
     <>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&display=swap');
-        
+
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-        
-        ::-webkit-scrollbar { width: 4px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0d0a; }
+        button { font-family: inherit; }
+
+        ::-webkit-scrollbar { width: 3px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #44403c40; border-radius: 4px; }
-        
+        ::-webkit-scrollbar-thumb { background: rgba(200,149,108,0.15); border-radius: 3px; }
+
         .line-clamp-2 {
           display: -webkit-box;
           -webkit-line-clamp: 2;
           -webkit-box-orient: vertical;
           overflow: hidden;
         }
-        
+
         @keyframes pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.5; }
@@ -1392,12 +1480,12 @@ export default function ScriptureMemorizeApp() {
 
         @keyframes spin { to { transform: rotate(360deg); } }
         .animate-spin { animation: spin 1s linear infinite; }
-        
+
         input[type="range"] {
           -webkit-appearance: none;
-          height: 4px;
-          background: #292524;
-          border-radius: 4px;
+          height: 3px;
+          background: rgba(255,248,240,0.06);
+          border-radius: 3px;
           outline: none;
         }
         input[type="range"]::-webkit-slider-thumb {
@@ -1405,12 +1493,16 @@ export default function ScriptureMemorizeApp() {
           width: 14px;
           height: 14px;
           border-radius: 50%;
-          background: #b45309;
+          background: #c8956c;
           cursor: pointer;
+          border: 2px solid #0f0d0a;
         }
+
+        input::placeholder { color: #5c5650; }
+        input:focus { border-color: rgba(200,149,108,0.3) !important; }
       `}</style>
-      
-      <div className="min-h-screen text-stone-200" style={{ maxWidth: "430px", margin: "0 auto" }}>
+
+      <div style={{ minHeight: "100vh", color: C.text, maxWidth: 430, margin: "0 auto" }}>
         {view === "home" && renderHome()}
         {view === "browse" && renderBrowse()}
         {view === "practice" && renderPractice()}
@@ -1418,10 +1510,10 @@ export default function ScriptureMemorizeApp() {
 
         {/* Loading overlay */}
         {isLoadingChapter && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center" style={{ background: "rgba(10,9,8,0.85)" }}>
-            <div className="text-center">
-              <div className="w-10 h-10 border-2 border-amber-700 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-              <p className="text-stone-300 text-sm" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
+          <div style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(10,9,8,0.85)" }}>
+            <div style={{ textAlign: "center" }}>
+              <div className="animate-spin" style={{ width: 40, height: 40, border: `2px solid ${C.accentDim}`, borderTopColor: "transparent", borderRadius: "50%", margin: "0 auto 12px" }} />
+              <p style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", color: C.textDim, fontSize: 14 }}>
                 Fetching chapter...
               </p>
             </div>
@@ -1430,24 +1522,23 @@ export default function ScriptureMemorizeApp() {
 
         {/* Settings modal */}
         {showSettings && (
-          <div className="fixed inset-0 z-[90] flex items-end justify-center" style={{ background: "rgba(10,9,8,0.7)" }} onClick={() => setShowSettings(false)}>
+          <div style={{ position: "fixed", inset: 0, zIndex: 90, display: "flex", alignItems: "flex-end", justifyContent: "center", background: "rgba(10,9,8,0.7)" }} onClick={() => setShowSettings(false)}>
             <div
-              className="w-full rounded-t-2xl p-5 pb-8"
-              style={{ maxWidth: "430px", background: "linear-gradient(165deg, #1c1917, #0d0b09)" }}
+              style={{ width: "100%", maxWidth: 430, borderRadius: "20px 20px 0 0", padding: "20px 20px 32px", background: "linear-gradient(170deg, #1c1917, #0f0d0a)" }}
               onClick={(e) => e.stopPropagation()}
             >
               {/* Handle */}
-              <div className="w-10 h-1 rounded-full bg-stone-700 mx-auto mb-5" />
+              <div style={{ width: 40, height: 4, borderRadius: 99, background: "rgba(255,248,240,0.08)", margin: "0 auto 20px" }} />
 
-              <h2 className="text-xl font-light text-stone-100 mb-5" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
+              <h2 style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontWeight: 300, fontSize: "1.25rem", color: C.text, marginBottom: 20 }}>
                 Settings
               </h2>
 
               {/* TTS Speed */}
-              <div className="mb-5">
-                <p className="text-stone-400 text-xs tracking-[0.15em] uppercase mb-2">Reading Speed</p>
-                <div className="flex items-center gap-3">
-                  <span className="text-stone-500 text-[10px] tracking-wider">SLOW</span>
+              <div style={{ marginBottom: 20 }}>
+                <p style={{ ...S.label, marginBottom: 8 }}>Reading Speed</p>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <span style={{ color: C.textFaint, fontSize: 10, letterSpacing: "0.1em" }}>SLOW</span>
                   <input
                     type="range"
                     min="0.5"
@@ -1455,68 +1546,68 @@ export default function ScriptureMemorizeApp() {
                     step="0.05"
                     value={ttsRate}
                     onChange={(e) => setTtsRate(parseFloat(e.target.value))}
-                    className="flex-1"
+                    style={{ flex: 1 }}
                   />
-                  <span className="text-stone-500 text-[10px] tracking-wider">FAST</span>
-                  <span className="text-amber-500 text-xs w-8 text-right">{ttsRate.toFixed(2)}x</span>
+                  <span style={{ color: C.textFaint, fontSize: 10, letterSpacing: "0.1em" }}>FAST</span>
+                  <span style={{ color: C.accent, fontSize: 12, width: 32, textAlign: "right" }}>{ttsRate.toFixed(2)}x</span>
                 </div>
               </div>
 
               {/* Clear Progress */}
-              <div className="mb-3">
+              <div style={{ marginBottom: 10 }}>
                 <button
                   onClick={() => {
                     if (window.confirm("Clear all progress? This cannot be undone.")) {
                       setProgress({});
                     }
                   }}
-                  className="w-full p-3.5 rounded-xl bg-stone-800/30 border border-stone-700/20 text-left hover:bg-stone-800/50 transition-colors flex items-center justify-between"
+                  style={{ ...S.card, width: "100%", padding: 14, textAlign: "left", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between" }}
                 >
                   <div>
-                    <p className="text-stone-200 text-sm">Clear Progress</p>
-                    <p className="text-stone-500 text-xs mt-0.5">Reset all memorization progress</p>
+                    <p style={{ color: C.text, fontSize: 14 }}>Clear Progress</p>
+                    <p style={{ color: C.textFaint, fontSize: 11, marginTop: 2 }}>Reset all memorization progress</p>
                   </div>
-                  <span className="text-stone-500 text-xs">{Object.keys(progress).length} entries</span>
+                  <span style={{ color: C.textFaint, fontSize: 12 }}>{Object.keys(progress).length} entries</span>
                 </button>
               </div>
 
               {/* Clear Favorites */}
-              <div className="mb-3">
+              <div style={{ marginBottom: 10 }}>
                 <button
                   onClick={() => {
                     if (window.confirm("Clear all favorites?")) {
                       setFavorites([]);
                     }
                   }}
-                  className="w-full p-3.5 rounded-xl bg-stone-800/30 border border-stone-700/20 text-left hover:bg-stone-800/50 transition-colors flex items-center justify-between"
+                  style={{ ...S.card, width: "100%", padding: 14, textAlign: "left", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between" }}
                 >
                   <div>
-                    <p className="text-stone-200 text-sm">Clear Favorites</p>
-                    <p className="text-stone-500 text-xs mt-0.5">Remove all saved favorites</p>
+                    <p style={{ color: C.text, fontSize: 14 }}>Clear Favorites</p>
+                    <p style={{ color: C.textFaint, fontSize: 11, marginTop: 2 }}>Remove all saved favorites</p>
                   </div>
-                  <span className="text-stone-500 text-xs">{favorites.length} saved</span>
+                  <span style={{ color: C.textFaint, fontSize: 12 }}>{favorites.length} saved</span>
                 </button>
               </div>
 
               {/* Clear Chapter Cache */}
-              <div className="mb-5">
+              <div style={{ marginBottom: 20 }}>
                 <button
                   onClick={() => {
                     if (window.confirm("Clear cached chapters? They will be re-fetched when needed.")) {
                       localStorage.removeItem(CHAPTER_CACHE_KEY);
                     }
                   }}
-                  className="w-full p-3.5 rounded-xl bg-stone-800/30 border border-stone-700/20 text-left hover:bg-stone-800/50 transition-colors"
+                  style={{ ...S.card, width: "100%", padding: 14, textAlign: "left", cursor: "pointer" }}
                 >
-                  <p className="text-stone-200 text-sm">Clear Chapter Cache</p>
-                  <p className="text-stone-500 text-xs mt-0.5">Remove downloaded chapters from local storage</p>
+                  <p style={{ color: C.text, fontSize: 14 }}>Clear Chapter Cache</p>
+                  <p style={{ color: C.textFaint, fontSize: 11, marginTop: 2 }}>Remove downloaded chapters from local storage</p>
                 </button>
               </div>
 
               {/* About */}
-              <div className="pt-4 border-t border-stone-800/50 text-center">
-                <p className="text-stone-400 text-xs">Scripture Memory</p>
-                <p className="text-stone-500 text-[10px] mt-0.5">v0.1.0 · KJV</p>
+              <div style={{ paddingTop: 16, borderTop: `1px solid ${C.cardBorder}`, textAlign: "center" }}>
+                <p style={{ color: C.textDim, fontSize: 12 }}>Scripture Memory</p>
+                <p style={{ color: C.textFaint, fontSize: 10, marginTop: 2 }}>v0.2.0 &middot; KJV</p>
               </div>
             </div>
           </div>
