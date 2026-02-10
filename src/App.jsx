@@ -266,6 +266,7 @@ const Icons = {
 
 // ─── Storage helpers ───
 const STORAGE_KEY = "scripture_memorize_v1";
+const CHAPTER_CACHE_KEY = "scripture_chapter_cache";
 const loadState = () => {
   try {
     const s = localStorage.getItem(STORAGE_KEY);
@@ -275,6 +276,47 @@ const loadState = () => {
 const saveState = (state) => {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch(e) {}
 };
+const loadChapterCache = () => {
+  try {
+    const s = localStorage.getItem(CHAPTER_CACHE_KEY);
+    return s ? JSON.parse(s) : {};
+  } catch(e) { return {}; }
+};
+const saveChapterCache = (cache) => {
+  try { localStorage.setItem(CHAPTER_CACHE_KEY, JSON.stringify(cache)); } catch(e) {}
+};
+
+// ─── Bible API fetch ───
+const fetchChapter = async (book, chapter) => {
+  const cache = loadChapterCache();
+  const key = `${book}_${chapter}`;
+  if (cache[key]) return cache[key];
+  const query = encodeURIComponent(`${book} ${chapter}`);
+  const res = await fetch(`https://bible-api.com/${query}?translation=kjv`);
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (!data.verses || data.verses.length === 0) return null;
+  const verses = {};
+  for (const v of data.verses) {
+    verses[v.verse] = v.text.trim();
+  }
+  cache[key] = verses;
+  saveChapterCache(cache);
+  return verses;
+};
+
+// ─── All books of the Bible (for full library browse) ───
+const BIBLE_BOOKS = [
+  "Genesis","Exodus","Leviticus","Numbers","Deuteronomy","Joshua","Judges","Ruth",
+  "1 Samuel","2 Samuel","1 Kings","2 Kings","1 Chronicles","2 Chronicles","Ezra",
+  "Nehemiah","Esther","Job","Psalms","Proverbs","Ecclesiastes","Song of Solomon",
+  "Isaiah","Jeremiah","Lamentations","Ezekiel","Daniel","Hosea","Joel","Amos",
+  "Obadiah","Jonah","Micah","Nahum","Habakkuk","Zephaniah","Haggai","Zechariah","Malachi",
+  "Matthew","Mark","Luke","John","Acts","Romans","1 Corinthians","2 Corinthians",
+  "Galatians","Ephesians","Philippians","Colossians","1 Thessalonians","2 Thessalonians",
+  "1 Timothy","2 Timothy","Titus","Philemon","Hebrews","James","1 Peter","2 Peter",
+  "1 John","2 John","3 John","Jude","Revelation",
+];
 
 // ─── Popular passages for quick start ───
 const POPULAR_PASSAGES = [
@@ -314,6 +356,9 @@ export default function ScriptureMemorizeApp() {
   const [searchQuery, setSearchQuery] = useState("");
   const [practiceVerseText, setPracticeVerseText] = useState("");
   const [practiceRef, setPracticeRef] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
+  const [isLoadingChapter, setIsLoadingChapter] = useState(false);
+  const [browseChapterNum, setBrowseChapterNum] = useState("");
   const recognitionRef = useRef(null);
   const synthRef = useRef(window.speechSynthesis);
 
@@ -452,14 +497,33 @@ export default function ScriptureMemorizeApp() {
     setIsListening(false);
   }, []);
 
-  // ─── Start practice ───
-  const startPractice = useCallback((book, chapter, verse = null) => {
-    const verses = getVersesForPractice(book, chapter, verse);
+  // ─── Start practice (supports API fetch for full chapters) ───
+  const startPractice = useCallback(async (book, chapter, verse = null) => {
+    // Try local data first
+    let verses = getVersesForPractice(book, chapter, verse);
+
+    // If no local data or requesting full chapter, fetch from API
+    if (verses.length === 0 || (!verse && Object.keys(KJV_DATA[book]?.[chapter] || {}).length < 5)) {
+      setIsLoadingChapter(true);
+      const fetched = await fetchChapter(book, chapter);
+      setIsLoadingChapter(false);
+      if (fetched) {
+        if (verse) {
+          const text = fetched[verse];
+          verses = text ? [{ ref: `${book} ${chapter}:${verse}`, text, book, chapter, verse }] : verses;
+        } else {
+          verses = Object.entries(fetched)
+            .sort(([a], [b]) => Number(a) - Number(b))
+            .map(([v, text]) => ({ ref: `${book} ${chapter}:${v}`, text, book, chapter, verse: Number(v) }));
+        }
+      }
+    }
+
     if (verses.length === 0) return;
-    
+
     const fullText = verses.map(v => v.text).join(" ");
     const ref = verse ? `${book} ${chapter}:${verse}` : `${book} ${chapter}`;
-    
+
     setPracticeVerseText(fullText);
     setPracticeRef(ref);
     setCurrentSegment(0);
@@ -468,7 +532,7 @@ export default function ScriptureMemorizeApp() {
     setCoachMessage("");
     setPracticeMode("listen");
     setView("practice");
-    
+
     setSessionResumeInfo({ book, chapter, verse, ref, segment: 0 });
   }, [getVersesForPractice]);
 
@@ -520,8 +584,8 @@ export default function ScriptureMemorizeApp() {
     }
   }, [currentSegment, stopListening, stopSpeaking]);
 
-  // Books list
-  const books = Object.keys(KJV_DATA);
+  // Books list — full Bible
+  const books = BIBLE_BOOKS;
 
   // Search filter
   const searchResults = useMemo(() => {
@@ -589,7 +653,7 @@ export default function ScriptureMemorizeApp() {
             </h1>
             <p className="text-xs tracking-[0.3em] uppercase text-amber-600/80 mt-0.5 font-medium">Memorize · KJV</p>
           </div>
-          <button onClick={() => {}} className="w-10 h-10 rounded-full bg-stone-800/50 flex items-center justify-center text-stone-400 hover:text-stone-200 transition-colors">
+          <button onClick={() => setShowSettings(true)} className="w-10 h-10 rounded-full bg-stone-800/50 flex items-center justify-center text-stone-400 hover:text-stone-200 transition-colors">
             <Icons.Settings />
           </button>
         </div>
@@ -739,17 +803,47 @@ export default function ScriptureMemorizeApp() {
         )}
 
         {selectedBook && !selectedChapter && (
-          <div className="grid grid-cols-4 gap-2.5">
-            {Object.keys(KJV_DATA[selectedBook] || {}).sort((a,b) => Number(a) - Number(b)).map(ch => (
-              <button
-                key={ch}
-                onClick={() => setSelectedChapter(Number(ch))}
-                className="aspect-square rounded-xl bg-stone-800/30 border border-stone-700/20 flex items-center justify-center text-stone-300 text-lg hover:bg-amber-900/20 hover:border-amber-800/30 hover:text-amber-400 transition-all"
-                style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}
-              >
-                {ch}
-              </button>
-            ))}
+          <div>
+            {/* Chapter number input */}
+            <div className="mb-5">
+              <p className="text-stone-400 text-xs tracking-[0.15em] uppercase mb-2">Enter chapter number</p>
+              <form onSubmit={(e) => { e.preventDefault(); const n = parseInt(browseChapterNum); if (n > 0) { setSelectedChapter(n); setBrowseChapterNum(""); } }} className="flex gap-2">
+                <input
+                  type="number"
+                  min="1"
+                  placeholder="e.g. 3"
+                  value={browseChapterNum}
+                  onChange={(e) => setBrowseChapterNum(e.target.value)}
+                  className="flex-1 px-4 py-3 rounded-xl bg-stone-800/40 border border-stone-700/30 text-stone-200 placeholder-stone-500 outline-none focus:border-amber-700/50 transition-colors text-sm"
+                />
+                <button
+                  type="submit"
+                  className="px-5 py-3 rounded-xl text-sm font-medium transition-all hover:scale-[1.02] active:scale-[0.98]"
+                  style={{ background: "linear-gradient(135deg, #92400e, #b45309)", color: "#fff" }}
+                >
+                  Go
+                </button>
+              </form>
+            </div>
+
+            {/* Quick-access: embedded chapters */}
+            {KJV_DATA[selectedBook] && (
+              <>
+                <p className="text-stone-400 text-xs tracking-[0.15em] uppercase mb-2">Saved locally</p>
+                <div className="grid grid-cols-4 gap-2.5">
+                  {Object.keys(KJV_DATA[selectedBook]).sort((a,b) => Number(a) - Number(b)).map(ch => (
+                    <button
+                      key={ch}
+                      onClick={() => setSelectedChapter(Number(ch))}
+                      className="aspect-square rounded-xl bg-stone-800/30 border border-stone-700/20 flex items-center justify-center text-stone-300 text-lg hover:bg-amber-900/20 hover:border-amber-800/30 hover:text-amber-400 transition-all"
+                      style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}
+                    >
+                      {ch}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -761,10 +855,11 @@ export default function ScriptureMemorizeApp() {
               style={{ background: "linear-gradient(135deg, #92400e25, #78350f35)", border: "1px solid #92400e30" }}
             >
               <p className="text-amber-400 font-medium">Practice Entire Chapter</p>
-              <p className="text-stone-400 text-xs mt-1">{Object.keys(KJV_DATA[selectedBook][selectedChapter]).length} verses</p>
+              <p className="text-stone-400 text-xs mt-1">Fetches full chapter from KJV</p>
             </button>
-            
-            {Object.entries(KJV_DATA[selectedBook][selectedChapter]).sort(([a],[b]) => Number(a) - Number(b)).map(([v, text]) => {
+
+            {/* Show embedded verses if available */}
+            {KJV_DATA[selectedBook]?.[selectedChapter] && Object.entries(KJV_DATA[selectedBook][selectedChapter]).sort(([a],[b]) => Number(a) - Number(b)).map(([v, text]) => {
               const ref = `${selectedBook} ${selectedChapter}:${v}`;
               const isFav = favorites.includes(ref);
               const prog = progress[ref];
@@ -1170,6 +1265,9 @@ export default function ScriptureMemorizeApp() {
           50% { opacity: 0.5; }
         }
         .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .animate-spin { animation: spin 1s linear infinite; }
         
         input[type="range"] {
           -webkit-appearance: none;
@@ -1193,6 +1291,112 @@ export default function ScriptureMemorizeApp() {
         {view === "browse" && renderBrowse()}
         {view === "practice" && renderPractice()}
         {view === "progress" && renderProgress()}
+
+        {/* Loading overlay */}
+        {isLoadingChapter && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center" style={{ background: "rgba(10,9,8,0.85)" }}>
+            <div className="text-center">
+              <div className="w-10 h-10 border-2 border-amber-700 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+              <p className="text-stone-300 text-sm" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
+                Fetching chapter...
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Settings modal */}
+        {showSettings && (
+          <div className="fixed inset-0 z-[90] flex items-end justify-center" style={{ background: "rgba(10,9,8,0.7)" }} onClick={() => setShowSettings(false)}>
+            <div
+              className="w-full rounded-t-2xl p-5 pb-8"
+              style={{ maxWidth: "430px", background: "linear-gradient(165deg, #1c1917, #0d0b09)" }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Handle */}
+              <div className="w-10 h-1 rounded-full bg-stone-700 mx-auto mb-5" />
+
+              <h2 className="text-xl font-light text-stone-100 mb-5" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
+                Settings
+              </h2>
+
+              {/* TTS Speed */}
+              <div className="mb-5">
+                <p className="text-stone-400 text-xs tracking-[0.15em] uppercase mb-2">Reading Speed</p>
+                <div className="flex items-center gap-3">
+                  <span className="text-stone-500 text-[10px] tracking-wider">SLOW</span>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="1.2"
+                    step="0.05"
+                    value={ttsRate}
+                    onChange={(e) => setTtsRate(parseFloat(e.target.value))}
+                    className="flex-1"
+                  />
+                  <span className="text-stone-500 text-[10px] tracking-wider">FAST</span>
+                  <span className="text-amber-500 text-xs w-8 text-right">{ttsRate.toFixed(2)}x</span>
+                </div>
+              </div>
+
+              {/* Clear Progress */}
+              <div className="mb-3">
+                <button
+                  onClick={() => {
+                    if (window.confirm("Clear all progress? This cannot be undone.")) {
+                      setProgress({});
+                    }
+                  }}
+                  className="w-full p-3.5 rounded-xl bg-stone-800/30 border border-stone-700/20 text-left hover:bg-stone-800/50 transition-colors flex items-center justify-between"
+                >
+                  <div>
+                    <p className="text-stone-200 text-sm">Clear Progress</p>
+                    <p className="text-stone-500 text-xs mt-0.5">Reset all memorization progress</p>
+                  </div>
+                  <span className="text-stone-500 text-xs">{Object.keys(progress).length} entries</span>
+                </button>
+              </div>
+
+              {/* Clear Favorites */}
+              <div className="mb-3">
+                <button
+                  onClick={() => {
+                    if (window.confirm("Clear all favorites?")) {
+                      setFavorites([]);
+                    }
+                  }}
+                  className="w-full p-3.5 rounded-xl bg-stone-800/30 border border-stone-700/20 text-left hover:bg-stone-800/50 transition-colors flex items-center justify-between"
+                >
+                  <div>
+                    <p className="text-stone-200 text-sm">Clear Favorites</p>
+                    <p className="text-stone-500 text-xs mt-0.5">Remove all saved favorites</p>
+                  </div>
+                  <span className="text-stone-500 text-xs">{favorites.length} saved</span>
+                </button>
+              </div>
+
+              {/* Clear Chapter Cache */}
+              <div className="mb-5">
+                <button
+                  onClick={() => {
+                    if (window.confirm("Clear cached chapters? They will be re-fetched when needed.")) {
+                      localStorage.removeItem(CHAPTER_CACHE_KEY);
+                    }
+                  }}
+                  className="w-full p-3.5 rounded-xl bg-stone-800/30 border border-stone-700/20 text-left hover:bg-stone-800/50 transition-colors"
+                >
+                  <p className="text-stone-200 text-sm">Clear Chapter Cache</p>
+                  <p className="text-stone-500 text-xs mt-0.5">Remove downloaded chapters from local storage</p>
+                </button>
+              </div>
+
+              {/* About */}
+              <div className="pt-4 border-t border-stone-800/50 text-center">
+                <p className="text-stone-400 text-xs">Scripture Memory</p>
+                <p className="text-stone-500 text-[10px] mt-0.5">v0.1.0 · KJV</p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </>
   );
