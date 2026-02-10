@@ -174,32 +174,91 @@ const KJV_DATA = {
 const normalize = (text) =>
   text.toLowerCase().replace(/[^a-z0-9\s']/g, "").replace(/\s+/g, " ").trim();
 
-// ─── Word-level alignment engine ───
+// ─── KJV speech recognition synonyms ───
+// Speech-to-text often modernizes archaic KJV words
+const KJV_SYNONYMS = {
+  thee: ["you","the"], thou: ["you"], thy: ["your","the"], thine: ["your","yours"],
+  hath: ["has","have"], doth: ["does","do"], doeth: ["does"],
+  shalt: ["shall","should"], wilt: ["will"], art: ["are"],
+  saith: ["says","said"], cometh: ["comes","come"], goeth: ["goes"],
+  maketh: ["makes","make"], giveth: ["gives","give"], taketh: ["takes"],
+  loveth: ["loves"], liveth: ["lives"], knoweth: ["knows"],
+  walketh: ["walks"], leadeth: ["leads"], keepeth: ["keeps"],
+  seeketh: ["seeks"], passeth: ["passes"], restoreth: ["restores"],
+  runneth: ["runs"], bringeth: ["brings"], anointest: ["anoint"],
+  prepareth: ["prepares"], followeth: ["follows"],
+  unto: ["to","onto","into"], wherefore: ["therefore","why"],
+  ye: ["you","yeah","he"], yea: ["yes","yeah","yay"],
+  begotten: ["begot"], whosoever: ["whoever"],
+  brethren: ["brothers","brethren"], whatsoever: ["whatever","whatsoever"],
+  throughly: ["thoroughly"], notwithstanding: ["nevertheless"],
+  longsuffering: ["long","patience"], nay: ["no","nah"],
+  lo: ["low","look"], alway: ["always"], afore: ["before"],
+};
+
+// ─── Word-level alignment engine (improved) ───
+function cleanWord(w) {
+  return w.toLowerCase().replace(/[^a-z0-9']/g, "");
+}
+
+function wordsMatch(spoken, expected) {
+  if (spoken === expected) return true;
+  // Check KJV synonyms: expected is the KJV word, spoken might be modern
+  const syns = KJV_SYNONYMS[expected];
+  if (syns && syns.includes(spoken)) return true;
+  // Fuzzy match for longer words (handles slight speech recognition errors)
+  if (spoken.length > 2 && expected.length > 2 && levenshtein(spoken, expected) <= Math.max(1, Math.floor(expected.length / 4))) return true;
+  return false;
+}
+
 function alignWords(spokenWords, expectedWords) {
   const results = [];
   let ei = 0;
+  const LOOKAHEAD = 3; // how far ahead in expected words to search
+
   for (let si = 0; si < spokenWords.length && ei < expectedWords.length; si++) {
-    const sw = spokenWords[si].toLowerCase().replace(/[^a-z0-9']/g, "");
-    const ew = expectedWords[ei].toLowerCase().replace(/[^a-z0-9']/g, "");
+    const sw = cleanWord(spokenWords[si]);
     if (!sw) continue;
-    if (sw === ew) {
+    const ew = cleanWord(expectedWords[ei]);
+
+    // Direct match
+    if (wordsMatch(sw, ew)) {
       results.push({ word: expectedWords[ei], matched: true, index: ei });
       ei++;
-    } else if (ei + 1 < expectedWords.length) {
-      const next = expectedWords[ei + 1].toLowerCase().replace(/[^a-z0-9']/g, "");
-      if (sw === next) {
-        results.push({ word: expectedWords[ei], matched: false, index: ei });
+      continue;
+    }
+
+    // Look ahead in expected words — maybe speech skipped or merged a word
+    let found = false;
+    for (let look = 1; look <= LOOKAHEAD && ei + look < expectedWords.length; look++) {
+      const ahead = cleanWord(expectedWords[ei + look]);
+      if (wordsMatch(sw, ahead)) {
+        // Mark skipped expected words as unmatched
+        for (let skip = 0; skip < look; skip++) {
+          results.push({ word: expectedWords[ei + skip], matched: false, index: ei + skip });
+        }
+        ei += look;
+        results.push({ word: expectedWords[ei], matched: true, index: ei });
+        ei++;
+        found = true;
+        break;
+      }
+    }
+    if (found) continue;
+
+    // Check if spoken word is a merge of next 2 expected words (e.g. "cannot" = "can" + "not")
+    if (ei + 1 < expectedWords.length) {
+      const merged = cleanWord(expectedWords[ei]) + cleanWord(expectedWords[ei + 1]);
+      if (wordsMatch(sw, merged)) {
+        results.push({ word: expectedWords[ei], matched: true, index: ei });
         ei++;
         results.push({ word: expectedWords[ei], matched: true, index: ei });
         ei++;
-      } else {
-        // fuzzy single char diff
-        if (sw.length > 3 && ew.length > 3 && levenshtein(sw, ew) <= 2) {
-          results.push({ word: expectedWords[ei], matched: true, index: ei, fuzzy: true });
-          ei++;
-        }
+        continue;
       }
     }
+
+    // No match — spoken word is extra, skip it
   }
   return { aligned: results, matchedUpTo: ei, total: expectedWords.length };
 }
@@ -362,6 +421,12 @@ export default function ScriptureMemorizeApp() {
   const [continuousMode, setContinuousMode] = useState(true);
   const recognitionRef = useRef(null);
   const synthRef = useRef(window.speechSynthesis);
+  // Refs so recognition handler always sees current values
+  const expectedWordsRef = useRef([]);
+  const currentSegmentRef = useRef(0);
+  const practiceSegmentsRef = useRef([]);
+  const continuousModeRef = useRef(true);
+  const practiceRefRef = useRef("");
 
   // Load saved state
   useEffect(() => {
@@ -400,6 +465,13 @@ export default function ScriptureMemorizeApp() {
   const currentSegmentText = practiceSegments[currentSegment] || "";
   const expectedWords = normalize(currentSegmentText).split(/\s+/).filter(Boolean);
 
+  // Keep refs in sync
+  expectedWordsRef.current = expectedWords;
+  currentSegmentRef.current = currentSegment;
+  practiceSegmentsRef.current = practiceSegments;
+  continuousModeRef.current = continuousMode;
+  practiceRefRef.current = practiceRef;
+
   // ─── TTS ───
   const speak = useCallback((text, rate = ttsRate) => {
     synthRef.current.cancel();
@@ -422,90 +494,100 @@ export default function ScriptureMemorizeApp() {
   }, []);
 
   // ─── Speech Recognition ───
-  const startListening = useCallback(() => {
+  const launchRecognition = useCallback(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
       setCoachMessage("Speech recognition is not supported in this browser. Please try Chrome.");
       return;
     }
+    // Stop any prior session cleanly
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch(e) {}
+      recognitionRef.current = null;
+    }
+
     const recognition = new SR();
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = "en-US";
-    
+
+    let segmentDone = false;
+
     recognition.onresult = (event) => {
+      if (segmentDone) return;
+
       let transcript = "";
       for (let i = 0; i < event.results.length; i++) {
         transcript += event.results[i][0].transcript;
       }
       setSpokenText(transcript);
-      
-      // Align against expected
+
+      // Always read from refs so we match the CURRENT segment
+      const curExpected = expectedWordsRef.current;
       const spokenWords = normalize(transcript).split(/\s+/).filter(Boolean);
-      const result = alignWords(spokenWords, expectedWords);
+      const result = alignWords(spokenWords, curExpected);
       setAlignmentResult(result);
-      
-      // Check completion
+
+      // Segment complete?
       if (result.matchedUpTo >= result.total && result.total > 0) {
+        segmentDone = true;
         const pct = Math.round((result.matchedUpTo / result.total) * 100);
 
-        // Update progress
-        const key = practiceRef;
         setProgress(prev => ({
           ...prev,
-          [key]: {
-            ...prev[key],
-            segmentsCompleted: (prev[key]?.segmentsCompleted || 0) + 1,
-            totalSegments: practiceSegments.length,
+          [practiceRefRef.current]: {
+            ...prev[practiceRefRef.current],
+            segmentsCompleted: (prev[practiceRefRef.current]?.segmentsCompleted || 0) + 1,
+            totalSegments: practiceSegmentsRef.current.length,
             lastPracticed: Date.now(),
-            accuracy: Math.max(prev[key]?.accuracy || 0, pct),
+            accuracy: Math.max(prev[practiceRefRef.current]?.accuracy || 0, pct),
             status: pct >= 90 ? "memorized" : pct >= 60 ? "learning" : "in_progress",
           }
         }));
 
-        // Auto-advance in continuous mode
-        setCurrentSegment(prev => {
-          if (prev < practiceSegments.length - 1) {
+        const isLast = currentSegmentRef.current >= practiceSegmentsRef.current.length - 1;
+
+        // Kill this session so transcript resets for next segment
+        try { recognition.abort(); } catch(e) {}
+        recognitionRef.current = null;
+
+        if (isLast) {
+          setIsListening(false);
+          setCoachMessage("You've completed the entire passage!");
+        } else {
+          setCurrentSegment(prev => prev + 1);
+          if (continuousModeRef.current) {
             setSpokenText("");
             setAlignmentResult(null);
-            if (continuousMode) {
-              setCoachMessage("");
-            } else {
-              recognition.stop();
-              setIsListening(false);
-              setCoachMessage(pct >= 90 ? "Excellent! Segment complete." : "Good work! Moving on.");
-            }
-            return prev + 1;
+            setCoachMessage("");
+            // Brief pause then fresh recognition for the new segment
+            setTimeout(() => launchRecognition(), 250);
           } else {
-            recognition.stop();
             setIsListening(false);
-            setCoachMessage("You've completed the entire passage!");
-            return prev;
+            setCoachMessage(pct >= 90 ? "Excellent! Tap mic for next segment." : "Good work! Tap mic to continue.");
           }
-        });
+        }
       }
     };
 
     recognition.onerror = (e) => {
-      if (e.error !== "aborted") {
-        setCoachMessage("I didn't quite catch that. Shall we try again?");
+      if (e.error === "aborted") return;
+      if (e.error === "no-speech") {
+        // Chrome fires after ~5s silence — just let onend restart
+        return;
       }
+      setCoachMessage("I didn't catch that. Tap the mic to try again.");
       setIsListening(false);
+      recognitionRef.current = null;
     };
 
     recognition.onend = () => {
-      // In continuous mode, restart if we haven't finished all segments
-      if (continuousMode && recognitionRef.current === recognition) {
-        setCurrentSegment(prev => {
-          if (prev < practiceSegments.length - 1 || (alignmentResult && alignmentResult.matchedUpTo < alignmentResult.total)) {
-            try { recognition.start(); } catch(e) {}
-          } else {
-            setIsListening(false);
-          }
-          return prev;
-        });
-      } else {
-        setIsListening(false);
+      // Auto-restart if segment isn't done (handles Chrome's silent timeouts)
+      if (!segmentDone && recognitionRef.current === recognition) {
+        try { recognition.start(); } catch(e) {
+          setIsListening(false);
+          recognitionRef.current = null;
+        }
       }
     };
 
@@ -515,11 +597,14 @@ export default function ScriptureMemorizeApp() {
     setSpokenText("");
     setAlignmentResult(null);
     setCoachMessage("Go ahead — I'm listening.");
-  }, [expectedWords, practiceRef, practiceSegments, continuousMode, alignmentResult]);
+  }, []);
+
+  const startListening = launchRecognition;
 
   const stopListening = useCallback(() => {
     if (recognitionRef.current) {
-      recognitionRef.current.stop();
+      try { recognitionRef.current.abort(); } catch(e) {}
+      recognitionRef.current = null;
     }
     setIsListening(false);
   }, []);
