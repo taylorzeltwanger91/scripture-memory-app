@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-02-09
+
+### Added
+- Full Bible access: all 66 books, every chapter automatically fetched from KJV API
+- Browse view now auto-loads and displays all verses when a chapter is selected
+- Loading spinner while verses are being fetched
+- Cached chapters are highlighted in the chapter grid
+
+### Fixed
+- Single-chapter books (Obadiah, Philemon, 2 John, 3 John, Jude) now fetch correctly
+- Browse view no longer shows empty content for most chapters
+
 ## [0.1.0] - 2026-02-09
 
 ### Added

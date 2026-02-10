@@ -346,12 +346,20 @@ const saveChapterCache = (cache) => {
   try { localStorage.setItem(CHAPTER_CACHE_KEY, JSON.stringify(cache)); } catch(e) {}
 };
 
+// Single-chapter books need verse range format (otherwise "Obadiah 1" = "Obadiah 1:1")
+const SINGLE_CHAPTER_VERSES = {
+  "Obadiah": 21, "Philemon": 25, "2 John": 13, "3 John": 14, "Jude": 25,
+};
+
 // ─── Bible API fetch ───
 const fetchChapter = async (book, chapter) => {
   const cache = loadChapterCache();
   const key = `${book}_${chapter}`;
   if (cache[key]) return cache[key];
-  const query = encodeURIComponent(`${book} ${chapter}`);
+  // For single-chapter books, use range format to get all verses
+  const verseCount = SINGLE_CHAPTER_VERSES[book];
+  const ref = verseCount ? `${book} ${chapter}:1-${verseCount}` : `${book} ${chapter}`;
+  const query = encodeURIComponent(ref);
   const res = await fetch(`https://bible-api.com/${query}?translation=kjv`);
   if (!res.ok) return null;
   const data = await res.json();
@@ -481,6 +489,8 @@ export default function ScriptureMemorizeApp() {
   const [practiceRef, setPracticeRef] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [isLoadingChapter, setIsLoadingChapter] = useState(false);
+  const [browseVerses, setBrowseVerses] = useState(null);
+  const [isLoadingBrowse, setIsLoadingBrowse] = useState(false);
   const [browseChapterNum, setBrowseChapterNum] = useState("");
   const [continuousMode, setContinuousMode] = useState(true);
   const recognitionRef = useRef(null);
@@ -506,6 +516,25 @@ export default function ScriptureMemorizeApp() {
   useEffect(() => {
     saveState({ favorites, progress, lastSession: sessionResumeInfo });
   }, [favorites, progress, sessionResumeInfo]);
+
+  // Auto-fetch chapter when selected in browse view
+  useEffect(() => {
+    if (!selectedBook || !selectedChapter) {
+      setBrowseVerses(null);
+      return;
+    }
+    let cancelled = false;
+    setIsLoadingBrowse(true);
+    fetchChapter(selectedBook, selectedChapter).then(verses => {
+      if (!cancelled) {
+        setBrowseVerses(verses);
+        setIsLoadingBrowse(false);
+      }
+    }).catch(e => {
+      if (!cancelled) setIsLoadingBrowse(false);
+    });
+    return () => { cancelled = true; };
+  }, [selectedBook, selectedChapter]);
 
   // Get all verses for a selection
   const getVersesForPractice = useCallback((book, chapter, verse = null) => {
@@ -1061,24 +1090,27 @@ export default function ScriptureMemorizeApp() {
         )}
 
         {/* Book selected, no chapter: show chapter number grid */}
-        {selectedBook && !selectedChapter && (
+        {selectedBook && !selectedChapter && (() => {
+          const chapterCache = loadChapterCache();
+          return (
           <div>
             <p style={{ ...S.label, color: C.textDim, marginBottom: 12 }}>
-              {BOOK_CHAPTERS[selectedBook]} Chapters
+              {BOOK_CHAPTERS[selectedBook]} Chapters — tap any chapter to read & practice
             </p>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
               {Array.from({ length: BOOK_CHAPTERS[selectedBook] || 0 }, (_, i) => i + 1).map(ch => {
                 const hasLocal = KJV_DATA[selectedBook]?.[ch];
+                const hasCached = chapterCache[`${selectedBook}_${ch}`];
                 return (
                   <button
                     key={ch}
                     onClick={() => setSelectedChapter(ch)}
                     style={{
                       aspectRatio: "1", borderRadius: 10,
-                      background: hasLocal ? C.accentGlow : C.card,
-                      border: `1px solid ${hasLocal ? C.accentBorder : C.cardBorder}`,
+                      background: (hasLocal || hasCached) ? C.accentGlow : C.card,
+                      border: `1px solid ${(hasLocal || hasCached) ? C.accentBorder : C.cardBorder}`,
                       display: "flex", alignItems: "center", justifyContent: "center",
-                      color: hasLocal ? C.accent : C.textDim,
+                      color: (hasLocal || hasCached) ? C.accent : C.textDim,
                       fontSize: 15, fontFamily: "'Cormorant Garamond', Georgia, serif",
                       cursor: "pointer", transition: "all 0.15s",
                     }}
@@ -1089,9 +1121,10 @@ export default function ScriptureMemorizeApp() {
               })}
             </div>
           </div>
-        )}
+          );
+        })()}
 
-        {/* Chapter selected: practice button + verses */}
+        {/* Chapter selected: practice button + all verses from API */}
         {selectedBook && selectedChapter && (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <button
@@ -1099,11 +1132,19 @@ export default function ScriptureMemorizeApp() {
               style={{ width: "100%", padding: 16, borderRadius: 14, textAlign: "center", background: C.accentGlow, border: `1px solid ${C.accentBorder}`, cursor: "pointer", transition: "transform 0.15s" }}
             >
               <p style={{ color: C.accent, fontWeight: 500, fontSize: 15 }}>Practice Full Chapter</p>
-              <p style={{ color: C.textDim, fontSize: 11, marginTop: 4 }}>Fetches full chapter from KJV</p>
+              <p style={{ color: C.textDim, fontSize: 11, marginTop: 4 }}>{browseVerses ? `${Object.keys(browseVerses).length} verses` : "Fetches full chapter from KJV"}</p>
             </button>
 
-            {/* Show embedded verses if available */}
-            {KJV_DATA[selectedBook]?.[selectedChapter] && Object.entries(KJV_DATA[selectedBook][selectedChapter]).sort(([a],[b]) => Number(a) - Number(b)).map(([v, text]) => {
+            {/* Loading spinner while fetching */}
+            {isLoadingBrowse && (
+              <div style={{ textAlign: "center", padding: 32 }}>
+                <div className="animate-spin" style={{ width: 32, height: 32, border: `2px solid ${C.accentDim}`, borderTopColor: "transparent", borderRadius: "50%", margin: "0 auto 12px" }} />
+                <p style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", color: C.textDim, fontSize: 13 }}>Loading verses...</p>
+              </div>
+            )}
+
+            {/* Show all verses from API fetch */}
+            {browseVerses && Object.entries(browseVerses).sort(([a],[b]) => Number(a) - Number(b)).map(([v, text]) => {
               const ref = `${selectedBook} ${selectedChapter}:${v}`;
               const isFav = favorites.includes(ref);
               const prog = progress[ref];
@@ -1142,6 +1183,13 @@ export default function ScriptureMemorizeApp() {
                 </div>
               );
             })}
+
+            {/* Error state if fetch failed */}
+            {!isLoadingBrowse && !browseVerses && (
+              <div style={{ textAlign: "center", padding: 32 }}>
+                <p style={{ color: C.textDim, fontSize: 13 }}>Could not load verses. Tap "Practice Full Chapter" to try again.</p>
+              </div>
+            )}
           </div>
         )}
       </div>
