@@ -326,6 +326,8 @@ const Icons = {
 // ─── Storage helpers ───
 const STORAGE_KEY = "scripture_memorize_v1";
 const CHAPTER_CACHE_KEY = "scripture_chapter_cache";
+const DEEPGRAM_KEY_STORAGE = "scripture_deepgram_key";
+
 const loadState = () => {
   try {
     const s = localStorage.getItem(STORAGE_KEY);
@@ -343,6 +345,12 @@ const loadChapterCache = () => {
 };
 const saveChapterCache = (cache) => {
   try { localStorage.setItem(CHAPTER_CACHE_KEY, JSON.stringify(cache)); } catch(e) {}
+};
+const loadDeepgramKey = () => {
+  try { return localStorage.getItem(DEEPGRAM_KEY_STORAGE) || ""; } catch(e) { return ""; }
+};
+const saveDeepgramKey = (key) => {
+  try { localStorage.setItem(DEEPGRAM_KEY_STORAGE, key); } catch(e) {}
 };
 
 // ─── Bible API fetch ───
@@ -433,25 +441,27 @@ const FEATURED_PASSAGES = [
   },
 ];
 
-// ─── Color palette ───
+// ─── Parchment Color palette ───
 const C = {
-  bg: "#0f0d0a",
-  bgGrad: "linear-gradient(170deg, #16120e 0%, #0f0d0a 40%, #13100c 100%)",
-  card: "rgba(255,248,240,0.03)",
-  cardBorder: "rgba(255,248,240,0.06)",
-  accent: "#c8956c",
-  accentDim: "#8a7260",
-  accentGlow: "rgba(200,149,108,0.15)",
-  accentBorder: "rgba(200,149,108,0.25)",
-  text: "#e8e0d6",
-  textDim: "#9a9088",
-  textFaint: "#5c5650",
-  green: "#6abf7b",
-  greenBg: "rgba(106,191,123,0.1)",
-  greenBorder: "rgba(106,191,123,0.2)",
-  amberBg: "rgba(200,149,108,0.1)",
-  amberBorder: "rgba(200,149,108,0.2)",
-  red: "#dc2626",
+  bg: "#f4ece0",
+  bgGrad: "linear-gradient(170deg, #f7f0e4 0%, #f4ece0 40%, #f0e6d8 100%)",
+  card: "#faf6ef",
+  cardBorder: "#e0d5c5",
+  accent: "#8b5e3c",
+  accentDim: "#a07450",
+  accentGlow: "rgba(139,94,60,0.1)",
+  accentBorder: "rgba(139,94,60,0.25)",
+  accentHighlight: "#c49a6c",
+  active: "#d4a574",
+  text: "#2c1810",
+  textDim: "#6b5344",
+  textFaint: "#a89584",
+  green: "#4a7c59",
+  greenBg: "rgba(74,124,89,0.1)",
+  greenBorder: "rgba(74,124,89,0.25)",
+  amberBg: "rgba(196,154,108,0.15)",
+  amberBorder: "rgba(196,154,108,0.3)",
+  red: "#a63d2f",
 };
 
 // ─── Main App ───
@@ -480,8 +490,14 @@ export default function ScriptureMemorizeApp() {
   const [isLoadingChapter, setIsLoadingChapter] = useState(false);
   const [browseChapterNum, setBrowseChapterNum] = useState("");
   const [continuousMode, setContinuousMode] = useState(true);
+  const [deepgramKey, setDeepgramKey] = useState("");
   const recognitionRef = useRef(null);
   const synthRef = useRef(window.speechSynthesis);
+  // Deepgram refs
+  const deepgramWsRef = useRef(null);
+  const deepgramRecorderRef = useRef(null);
+  const deepgramStreamRef = useRef(null);
+  const deepgramFinalTranscriptRef = useRef("");
   // Refs so recognition handler always sees current values
   const expectedWordsRef = useRef([]);
   const currentSegmentRef = useRef(0);
@@ -497,6 +513,7 @@ export default function ScriptureMemorizeApp() {
       if (saved.progress) setProgress(saved.progress);
       if (saved.lastSession) setSessionResumeInfo(saved.lastSession);
     }
+    setDeepgramKey(loadDeepgramKey());
   }, []);
 
   // Save state on changes
@@ -554,8 +571,157 @@ export default function ScriptureMemorizeApp() {
     setIsSpeaking(false);
   }, []);
 
-  // ─── Speech Recognition ───
-  const launchRecognition = useCallback(() => {
+  // ─── Shared handler for processing transcript text (used by both Deepgram and Web Speech) ───
+  const handleSegmentComplete = useCallback((pct, recognition) => {
+    setProgress(prev => ({
+      ...prev,
+      [practiceRefRef.current]: {
+        ...prev[practiceRefRef.current],
+        segmentsCompleted: (prev[practiceRefRef.current]?.segmentsCompleted || 0) + 1,
+        totalSegments: practiceSegmentsRef.current.length,
+        lastPracticed: Date.now(),
+        accuracy: Math.max(prev[practiceRefRef.current]?.accuracy || 0, pct),
+        status: pct >= 90 ? "memorized" : pct >= 60 ? "learning" : "in_progress",
+      }
+    }));
+
+    const isLast = currentSegmentRef.current >= practiceSegmentsRef.current.length - 1;
+
+    if (isLast) {
+      setIsListening(false);
+      setCoachMessage("You've completed the entire passage!");
+    } else {
+      setCurrentSegment(prev => prev + 1);
+      if (continuousModeRef.current) {
+        setSpokenText("");
+        setAlignmentResult(null);
+        setCoachMessage("");
+      } else {
+        setIsListening(false);
+        setCoachMessage(pct >= 90 ? "Excellent! Tap mic for next segment." : "Good work! Tap mic to continue.");
+      }
+    }
+  }, []);
+
+  // ─── Deepgram WebSocket Streaming ───
+  const launchDeepgram = useCallback(() => {
+    const apiKey = loadDeepgramKey();
+    if (!apiKey) return false;
+
+    let segmentDone = false;
+    deepgramFinalTranscriptRef.current = "";
+
+    const startStreaming = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        deepgramStreamRef.current = stream;
+
+        const mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+        deepgramRecorderRef.current = mediaRecorder;
+
+        const ws = new WebSocket(
+          "wss://api.deepgram.com/v1/listen?model=nova-2&language=en&smart_format=true&punctuate=true",
+          ["token", apiKey]
+        );
+        deepgramWsRef.current = ws;
+
+        ws.onopen = () => {
+          mediaRecorder.ondataavailable = (e) => {
+            if (ws.readyState === WebSocket.OPEN && e.data.size > 0) {
+              ws.send(e.data);
+            }
+          };
+          mediaRecorder.start(250);
+        };
+
+        ws.onmessage = (event) => {
+          if (segmentDone) return;
+          try {
+            const data = JSON.parse(event.data);
+            const transcript = data.channel?.alternatives?.[0]?.transcript || "";
+            const isFinal = data.is_final;
+
+            if (isFinal && transcript) {
+              deepgramFinalTranscriptRef.current = deepgramFinalTranscriptRef.current
+                ? deepgramFinalTranscriptRef.current + " " + transcript
+                : transcript;
+            }
+
+            // Build cumulative transcript: all final + current interim
+            const cumulative = isFinal
+              ? deepgramFinalTranscriptRef.current
+              : (deepgramFinalTranscriptRef.current ? deepgramFinalTranscriptRef.current + " " + transcript : transcript);
+
+            if (!cumulative) return;
+
+            setSpokenText(cumulative);
+
+            const curExpected = expectedWordsRef.current;
+            const spokenWords = normalize(cumulative).split(/\s+/).filter(Boolean);
+            const result = alignWords(spokenWords, curExpected);
+            setAlignmentResult(result);
+
+            // Segment complete?
+            if (result.matchedUpTo >= result.total && result.total > 0) {
+              segmentDone = true;
+              const pct = Math.round((result.matchedUpTo / result.total) * 100);
+
+              // Stop current Deepgram session
+              try { mediaRecorder.stop(); } catch(e) {}
+              try { stream.getTracks().forEach(t => t.stop()); } catch(e) {}
+              try { ws.close(); } catch(e) {}
+              deepgramWsRef.current = null;
+              deepgramRecorderRef.current = null;
+              deepgramStreamRef.current = null;
+
+              const isLast = currentSegmentRef.current >= practiceSegmentsRef.current.length - 1;
+
+              handleSegmentComplete(pct, null);
+
+              if (!isLast && continuousModeRef.current) {
+                // Restart Deepgram for next segment after brief pause
+                setTimeout(() => launchDeepgram(), 250);
+              }
+            }
+          } catch(e) {
+            // Ignore JSON parse errors
+          }
+        };
+
+        ws.onerror = () => {
+          setCoachMessage("Deepgram connection error. Check your API key.");
+          setIsListening(false);
+          try { mediaRecorder.stop(); } catch(e) {}
+          try { stream.getTracks().forEach(t => t.stop()); } catch(e) {}
+          deepgramWsRef.current = null;
+          deepgramRecorderRef.current = null;
+          deepgramStreamRef.current = null;
+        };
+
+        ws.onclose = () => {
+          // Only handle if not already cleaned up
+          if (!segmentDone && deepgramWsRef.current === ws) {
+            deepgramWsRef.current = null;
+          }
+        };
+
+        setIsListening(true);
+        setSpokenText("");
+        setAlignmentResult(null);
+        setCoachMessage("Go ahead \u2014 I'm listening. (Deepgram)");
+      } catch(e) {
+        setCoachMessage("Could not access microphone. Please allow mic access.");
+        setIsListening(false);
+        return;
+      }
+    };
+
+    startStreaming();
+    return true;
+  }, [handleSegmentComplete]);
+
+  // ─── Speech Recognition (Web Speech API fallback) ───
+  const launchWebSpeech = useCallback(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
       setCoachMessage("Speech recognition is not supported in this browser. Please try Chrome.");
@@ -594,39 +760,20 @@ export default function ScriptureMemorizeApp() {
         segmentDone = true;
         const pct = Math.round((result.matchedUpTo / result.total) * 100);
 
-        setProgress(prev => ({
-          ...prev,
-          [practiceRefRef.current]: {
-            ...prev[practiceRefRef.current],
-            segmentsCompleted: (prev[practiceRefRef.current]?.segmentsCompleted || 0) + 1,
-            totalSegments: practiceSegmentsRef.current.length,
-            lastPracticed: Date.now(),
-            accuracy: Math.max(prev[practiceRefRef.current]?.accuracy || 0, pct),
-            status: pct >= 90 ? "memorized" : pct >= 60 ? "learning" : "in_progress",
-          }
-        }));
-
-        const isLast = currentSegmentRef.current >= practiceSegmentsRef.current.length - 1;
-
         // Kill this session so transcript resets for next segment
         try { recognition.abort(); } catch(e) {}
         recognitionRef.current = null;
 
-        if (isLast) {
-          setIsListening(false);
-          setCoachMessage("You've completed the entire passage!");
-        } else {
-          setCurrentSegment(prev => prev + 1);
-          if (continuousModeRef.current) {
-            setSpokenText("");
-            setAlignmentResult(null);
-            setCoachMessage("");
-            // Brief pause then fresh recognition for the new segment
-            setTimeout(() => launchRecognition(), 250);
-          } else {
-            setIsListening(false);
-            setCoachMessage(pct >= 90 ? "Excellent! Tap mic for next segment." : "Good work! Tap mic to continue.");
-          }
+        const isLast = currentSegmentRef.current >= practiceSegmentsRef.current.length - 1;
+
+        handleSegmentComplete(pct, recognition);
+
+        if (!isLast && continuousModeRef.current) {
+          setSpokenText("");
+          setAlignmentResult(null);
+          setCoachMessage("");
+          // Brief pause then fresh recognition for the new segment
+          setTimeout(() => launchWebSpeech(), 250);
         }
       }
     };
@@ -658,14 +805,39 @@ export default function ScriptureMemorizeApp() {
     setSpokenText("");
     setAlignmentResult(null);
     setCoachMessage("Go ahead \u2014 I'm listening.");
-  }, []);
+  }, [handleSegmentComplete]);
+
+  // ─── Unified launch: Deepgram first, Web Speech fallback ───
+  const launchRecognition = useCallback(() => {
+    const dgKey = loadDeepgramKey();
+    if (dgKey) {
+      const started = launchDeepgram();
+      if (started) return;
+    }
+    // Fallback to Web Speech API
+    launchWebSpeech();
+  }, [launchDeepgram, launchWebSpeech]);
 
   const startListening = launchRecognition;
 
   const stopListening = useCallback(() => {
+    // Stop Web Speech API
     if (recognitionRef.current) {
       try { recognitionRef.current.abort(); } catch(e) {}
       recognitionRef.current = null;
+    }
+    // Stop Deepgram
+    if (deepgramRecorderRef.current) {
+      try { deepgramRecorderRef.current.stop(); } catch(e) {}
+      deepgramRecorderRef.current = null;
+    }
+    if (deepgramStreamRef.current) {
+      try { deepgramStreamRef.current.getTracks().forEach(t => t.stop()); } catch(e) {}
+      deepgramStreamRef.current = null;
+    }
+    if (deepgramWsRef.current) {
+      try { deepgramWsRef.current.close(); } catch(e) {}
+      deepgramWsRef.current = null;
     }
     setIsListening(false);
   }, []);
@@ -839,7 +1011,7 @@ export default function ScriptureMemorizeApp() {
           </div>
           <button
             onClick={() => setShowSettings(true)}
-            style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(255,248,240,0.04)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: C.textDim, cursor: "pointer" }}
+            style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(139,94,60,0.08)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: C.textDim, cursor: "pointer" }}
           >
             <Icons.Settings />
           </button>
@@ -874,16 +1046,16 @@ export default function ScriptureMemorizeApp() {
             placeholder="Search verses or references..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            style={{ width: "100%", paddingLeft: 40, paddingRight: 16, paddingTop: 12, paddingBottom: 12, borderRadius: 12, background: "rgba(255,248,240,0.03)", border: `1px solid rgba(255,248,240,0.06)`, color: C.text, fontSize: 14, outline: "none", fontFamily: "inherit" }}
+            style={{ width: "100%", paddingLeft: 40, paddingRight: 16, paddingTop: 12, paddingBottom: 12, borderRadius: 12, background: C.card, border: `1px solid ${C.cardBorder}`, color: C.text, fontSize: 14, outline: "none", fontFamily: "inherit" }}
           />
         </div>
         {searchResults.length > 0 && (
-          <div style={{ marginTop: 8, background: "rgba(15,13,10,0.95)", border: `1px solid ${C.cardBorder}`, borderRadius: 12, maxHeight: 256, overflowY: "auto" }}>
+          <div style={{ marginTop: 8, background: C.card, border: `1px solid ${C.cardBorder}`, borderRadius: 12, maxHeight: 256, overflowY: "auto" }}>
             {searchResults.map((r, i) => (
               <button
                 key={i}
                 onClick={() => { startPractice(r.book, r.chapter, r.verse); setSearchQuery(""); }}
-                style={{ width: "100%", padding: 12, textAlign: "left", borderBottom: i < searchResults.length - 1 ? `1px solid rgba(255,248,240,0.04)` : "none", background: "transparent", border: "none", cursor: "pointer", color: C.text }}
+                style={{ width: "100%", padding: 12, textAlign: "left", borderBottom: i < searchResults.length - 1 ? `1px solid ${C.cardBorder}` : "none", background: "transparent", border: "none", cursor: "pointer", color: C.text }}
               >
                 <p style={{ color: C.accent, fontSize: 11, fontWeight: 500 }}>{r.ref}</p>
                 <p style={{ color: C.textDim, fontSize: 13, marginTop: 2 }} className="line-clamp-2">{r.text}</p>
@@ -925,7 +1097,7 @@ export default function ScriptureMemorizeApp() {
             <button
               key={i}
               onClick={() => startPractice(p.book, p.chapter, p.verse || null)}
-              style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 8px", borderRadius: 8, background: "transparent", border: "none", cursor: "pointer", borderBottom: i < POPULAR_PASSAGES.length - 1 ? `1px solid rgba(255,248,240,0.03)` : "none" }}
+              style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 8px", borderRadius: 8, background: "transparent", border: "none", cursor: "pointer", borderBottom: i < POPULAR_PASSAGES.length - 1 ? `1px solid ${C.cardBorder}` : "none" }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <span style={{ color: C.accentDim, fontSize: 11, width: 95, textAlign: "left", flexShrink: 0 }}>{p.ref}</span>
@@ -975,7 +1147,7 @@ export default function ScriptureMemorizeApp() {
           {(selectedBook || selectedChapter) && (
             <button
               onClick={() => { if (selectedChapter) setSelectedChapter(null); else setSelectedBook(null); }}
-              style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(255,248,240,0.04)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: C.textDim, cursor: "pointer" }}
+              style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(139,94,60,0.08)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: C.textDim, cursor: "pointer" }}
             >
               <Icons.ArrowLeft />
             </button>
@@ -1081,7 +1253,7 @@ export default function ScriptureMemorizeApp() {
                           <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 99, background: C.greenBg, color: C.green, border: `1px solid ${C.greenBorder}` }}>Memorized</span>
                         )}
                         {prog?.status === "learning" && (
-                          <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 99, background: C.amberBg, color: C.accent, border: `1px solid ${C.amberBorder}` }}>Learning</span>
+                          <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 99, background: C.amberBg, color: C.accentHighlight, border: `1px solid ${C.amberBorder}` }}>Learning</span>
                         )}
                       </div>
                       <p style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", color: C.textDim, fontSize: 14, lineHeight: 1.6 }}>
@@ -1099,7 +1271,7 @@ export default function ScriptureMemorizeApp() {
                   </div>
                   <button
                     onClick={() => startPractice(selectedBook, selectedChapter, Number(v))}
-                    style={{ marginTop: 12, width: "100%", padding: "8px 0", borderRadius: 8, background: "rgba(255,248,240,0.03)", border: `1px solid ${C.cardBorder}`, color: C.textDim, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+                    style={{ marginTop: 12, width: "100%", padding: "8px 0", borderRadius: 8, background: "rgba(139,94,60,0.06)", border: `1px solid ${C.cardBorder}`, color: C.textDim, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
                   >
                     <Icons.Play /> Practice
                   </button>
@@ -1120,12 +1292,12 @@ export default function ScriptureMemorizeApp() {
     const matchPct = alignmentResult ? Math.round((alignmentResult.matchedUpTo / alignmentResult.total) * 100) : 0;
 
     return (
-      <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh", background: "linear-gradient(170deg, #12100d 0%, #0a0908 50%, #110f0c 100%)" }}>
+      <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh", background: "linear-gradient(170deg, #f7f0e4 0%, #efe5d5 50%, #f2ead8 100%)" }}>
         {/* Top bar */}
         <div style={{ padding: "20px 20px 8px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <button
             onClick={() => { stopListening(); stopSpeaking(); setView("home"); }}
-            style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(255,248,240,0.04)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: C.textDim, cursor: "pointer" }}
+            style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(139,94,60,0.08)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: C.textDim, cursor: "pointer" }}
           >
             <Icons.X />
           </button>
@@ -1142,7 +1314,7 @@ export default function ScriptureMemorizeApp() {
 
         {/* Progress bar */}
         <div style={{ margin: "0 20px 16px" }}>
-          <div style={{ height: 3, background: "rgba(255,248,240,0.04)", borderRadius: 99, overflow: "hidden" }}>
+          <div style={{ height: 3, background: "rgba(139,94,60,0.1)", borderRadius: 99, overflow: "hidden" }}>
             <div style={{ height: "100%", borderRadius: 99, transition: "width 0.5s ease", width: `${completionPct}%`, background: `linear-gradient(90deg, ${C.accentDim}, ${C.accent})` }} />
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
@@ -1152,7 +1324,7 @@ export default function ScriptureMemorizeApp() {
         </div>
 
         {/* Mode selector */}
-        <div style={{ margin: "0 20px 20px", display: "flex", gap: 4, padding: 4, borderRadius: 14, background: "rgba(255,248,240,0.02)" }}>
+        <div style={{ margin: "0 20px 20px", display: "flex", gap: 4, padding: 4, borderRadius: 14, background: "rgba(139,94,60,0.05)" }}>
           {[
             { id: "listen", label: "Listen", icon: <Icons.Volume /> },
             { id: "speak-with", label: "Speak With", icon: <Icons.Repeat /> },
@@ -1192,11 +1364,11 @@ export default function ScriptureMemorizeApp() {
             {/* Match indicator */}
             {(practiceMode === "recall" || practiceMode === "faded") && alignmentResult && (
               <div style={{ marginTop: 24 }}>
-                <div style={{ height: 5, background: "rgba(255,248,240,0.04)", borderRadius: 99, overflow: "hidden", maxWidth: 280, margin: "0 auto" }}>
+                <div style={{ height: 5, background: "rgba(139,94,60,0.1)", borderRadius: 99, overflow: "hidden", maxWidth: 280, margin: "0 auto" }}>
                   <div style={{
                     height: "100%", borderRadius: 99, transition: "width 0.3s ease",
                     width: `${matchPct}%`,
-                    background: matchPct >= 90 ? C.green : matchPct >= 60 ? C.accent : C.red,
+                    background: matchPct >= 90 ? C.green : matchPct >= 60 ? C.accentHighlight : C.red,
                   }} />
                 </div>
                 <p style={{ color: C.textFaint, fontSize: 12, marginTop: 6 }}>{matchPct}% matched</p>
@@ -1215,7 +1387,7 @@ export default function ScriptureMemorizeApp() {
 
         {/* Coach message */}
         {coachMessage && (
-          <div style={{ margin: "0 20px 12px", padding: 14, borderRadius: 12, background: "rgba(255,248,240,0.02)", border: `1px solid ${C.cardBorder}` }}>
+          <div style={{ margin: "0 20px 12px", padding: 14, borderRadius: 12, background: C.card, border: `1px solid ${C.cardBorder}` }}>
             <p style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", color: C.textDim, fontSize: 14, lineHeight: 1.5, textAlign: "center" }}>
               {coachMessage}
             </p>
@@ -1229,7 +1401,7 @@ export default function ScriptureMemorizeApp() {
             <button
               onClick={prevSegment}
               disabled={currentSegment === 0}
-              style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(255,248,240,0.04)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: C.textDim, cursor: currentSegment === 0 ? "default" : "pointer", opacity: currentSegment === 0 ? 0.3 : 1 }}
+              style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(139,94,60,0.08)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: C.textDim, cursor: currentSegment === 0 ? "default" : "pointer", opacity: currentSegment === 0 ? 0.3 : 1 }}
             >
               <Icons.SkipBack />
             </button>
@@ -1242,7 +1414,7 @@ export default function ScriptureMemorizeApp() {
                   width: 64, height: 64, borderRadius: "50%", border: "none", display: "flex", alignItems: "center", justifyContent: "center",
                   cursor: "pointer", transition: "transform 0.15s", color: "#fff",
                   background: isSpeaking ? "linear-gradient(135deg, #7c2d12, #9a3412)" : `linear-gradient(135deg, ${C.accentDim}, ${C.accent})`,
-                  boxShadow: `0 4px 20px rgba(200,149,108,0.3)`,
+                  boxShadow: `0 4px 20px rgba(139,94,60,0.3)`,
                 }}
               >
                 {isSpeaking ? <Icons.Pause /> : <Icons.Play />}
@@ -1259,7 +1431,7 @@ export default function ScriptureMemorizeApp() {
                   width: 64, height: 64, borderRadius: "50%", border: "none", display: "flex", alignItems: "center", justifyContent: "center",
                   cursor: "pointer", transition: "transform 0.15s", color: "#fff",
                   background: `linear-gradient(135deg, ${C.accentDim}, ${C.accent})`,
-                  boxShadow: `0 4px 20px rgba(200,149,108,0.3)`,
+                  boxShadow: `0 4px 20px rgba(139,94,60,0.3)`,
                 }}
               >
                 <Icons.Volume />
@@ -1273,8 +1445,8 @@ export default function ScriptureMemorizeApp() {
                 style={{
                   width: 64, height: 64, borderRadius: "50%", border: "none", display: "flex", alignItems: "center", justifyContent: "center",
                   cursor: "pointer", transition: "transform 0.15s", color: "#fff",
-                  background: isListening ? "linear-gradient(135deg, #dc2626, #ef4444)" : `linear-gradient(135deg, ${C.accentDim}, ${C.accent})`,
-                  boxShadow: isListening ? "0 4px 30px rgba(220,38,38,0.4)" : `0 4px 20px rgba(200,149,108,0.3)`,
+                  background: isListening ? "linear-gradient(135deg, #a63d2f, #c44b3a)" : `linear-gradient(135deg, ${C.accentDim}, ${C.accent})`,
+                  boxShadow: isListening ? "0 4px 30px rgba(166,61,47,0.4)" : `0 4px 20px rgba(139,94,60,0.3)`,
                 }}
               >
                 {isListening ? <Icons.MicOff /> : <Icons.Mic />}
@@ -1284,7 +1456,7 @@ export default function ScriptureMemorizeApp() {
             <button
               onClick={nextSegment}
               disabled={currentSegment >= practiceSegments.length - 1}
-              style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(255,248,240,0.04)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: C.textDim, cursor: currentSegment >= practiceSegments.length - 1 ? "default" : "pointer", opacity: currentSegment >= practiceSegments.length - 1 ? 0.3 : 1 }}
+              style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(139,94,60,0.08)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: C.textDim, cursor: currentSegment >= practiceSegments.length - 1 ? "default" : "pointer", opacity: currentSegment >= practiceSegments.length - 1 ? 0.3 : 1 }}
             >
               <Icons.SkipFwd />
             </button>
@@ -1300,7 +1472,7 @@ export default function ScriptureMemorizeApp() {
               <button
                 key={i}
                 onClick={btn.action}
-                style={{ padding: "8px 14px", borderRadius: 8, background: "rgba(255,248,240,0.03)", border: `1px solid ${C.cardBorder}`, color: C.textDim, fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", cursor: "pointer", transition: "color 0.15s" }}
+                style={{ padding: "8px 14px", borderRadius: 8, background: C.card, border: `1px solid ${C.cardBorder}`, color: C.textDim, fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", cursor: "pointer", transition: "color 0.15s" }}
               >
                 {btn.label}
               </button>
@@ -1313,7 +1485,7 @@ export default function ScriptureMemorizeApp() {
               onClick={() => setContinuousMode(prev => !prev)}
               style={{
                 display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 8, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", cursor: "pointer", transition: "all 0.2s",
-                background: continuousMode ? C.accentGlow : "rgba(255,248,240,0.02)",
+                background: continuousMode ? C.accentGlow : C.card,
                 color: continuousMode ? C.accent : C.textFaint,
                 border: `1px solid ${continuousMode ? C.accentBorder : C.cardBorder}`,
               }}
@@ -1359,7 +1531,7 @@ export default function ScriptureMemorizeApp() {
         <div style={{ margin: "0 20px 20px", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
           {[
             { label: "Memorized", value: memorizedCount, color: C.green },
-            { label: "Learning", value: learningCount, color: C.accent },
+            { label: "Learning", value: learningCount, color: C.accentHighlight },
             { label: "Total", value: totalCount, color: C.textDim },
           ].map((stat, i) => (
             <div key={i} style={{ ...S.card, padding: 12, textAlign: "center" }}>
@@ -1401,7 +1573,7 @@ export default function ScriptureMemorizeApp() {
                           ...(data.status === "memorized"
                             ? { background: C.greenBg, color: C.green, border: `1px solid ${C.greenBorder}` }
                             : data.status === "learning"
-                            ? { background: C.amberBg, color: C.accent, border: `1px solid ${C.amberBorder}` }
+                            ? { background: C.amberBg, color: C.accentHighlight, border: `1px solid ${C.amberBorder}` }
                             : { background: C.card, color: C.textDim, border: `1px solid ${C.cardBorder}` }
                           ),
                         }}>
@@ -1428,8 +1600,8 @@ export default function ScriptureMemorizeApp() {
   // Bottom navigation
   const renderBottomNav = () => (
     <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 50 }}>
-      <div style={{ height: 1, background: `linear-gradient(90deg, transparent, rgba(200,149,108,0.1), transparent)` }} />
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-around", padding: "8px 0 20px", background: `linear-gradient(180deg, rgba(15,13,10,0.9), ${C.bg})`, backdropFilter: "blur(12px)" }}>
+      <div style={{ height: 1, background: `linear-gradient(90deg, transparent, ${C.cardBorder}, transparent)` }} />
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-around", padding: "8px 0 20px", background: `linear-gradient(180deg, rgba(244,236,224,0.92), ${C.bg})`, backdropFilter: "blur(12px)" }}>
         {[
           { id: "home", label: "Home", icon: <Icons.Home /> },
           { id: "browse", label: "Library", icon: <Icons.Book /> },
@@ -1458,12 +1630,12 @@ export default function ScriptureMemorizeApp() {
         @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&display=swap');
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0d0a; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f4ece0; }
         button { font-family: inherit; }
 
         ::-webkit-scrollbar { width: 3px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: rgba(200,149,108,0.15); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb { background: rgba(139,94,60,0.2); border-radius: 3px; }
 
         .line-clamp-2 {
           display: -webkit-box;
@@ -1484,7 +1656,7 @@ export default function ScriptureMemorizeApp() {
         input[type="range"] {
           -webkit-appearance: none;
           height: 3px;
-          background: rgba(255,248,240,0.06);
+          background: rgba(139,94,60,0.15);
           border-radius: 3px;
           outline: none;
         }
@@ -1493,13 +1665,13 @@ export default function ScriptureMemorizeApp() {
           width: 14px;
           height: 14px;
           border-radius: 50%;
-          background: #c8956c;
+          background: #8b5e3c;
           cursor: pointer;
-          border: 2px solid #0f0d0a;
+          border: 2px solid #f4ece0;
         }
 
-        input::placeholder { color: #5c5650; }
-        input:focus { border-color: rgba(200,149,108,0.3) !important; }
+        input::placeholder { color: #a89584; }
+        input:focus { border-color: rgba(139,94,60,0.4) !important; }
       `}</style>
 
       <div style={{ minHeight: "100vh", color: C.text, maxWidth: 430, margin: "0 auto" }}>
@@ -1510,7 +1682,7 @@ export default function ScriptureMemorizeApp() {
 
         {/* Loading overlay */}
         {isLoadingChapter && (
-          <div style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(10,9,8,0.85)" }}>
+          <div style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(244,236,224,0.85)" }}>
             <div style={{ textAlign: "center" }}>
               <div className="animate-spin" style={{ width: 40, height: 40, border: `2px solid ${C.accentDim}`, borderTopColor: "transparent", borderRadius: "50%", margin: "0 auto 12px" }} />
               <p style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", color: C.textDim, fontSize: 14 }}>
@@ -1522,17 +1694,36 @@ export default function ScriptureMemorizeApp() {
 
         {/* Settings modal */}
         {showSettings && (
-          <div style={{ position: "fixed", inset: 0, zIndex: 90, display: "flex", alignItems: "flex-end", justifyContent: "center", background: "rgba(10,9,8,0.7)" }} onClick={() => setShowSettings(false)}>
+          <div style={{ position: "fixed", inset: 0, zIndex: 90, display: "flex", alignItems: "flex-end", justifyContent: "center", background: "rgba(44,24,16,0.4)" }} onClick={() => setShowSettings(false)}>
             <div
-              style={{ width: "100%", maxWidth: 430, borderRadius: "20px 20px 0 0", padding: "20px 20px 32px", background: "linear-gradient(170deg, #1c1917, #0f0d0a)" }}
+              style={{ width: "100%", maxWidth: 430, borderRadius: "20px 20px 0 0", padding: "20px 20px 32px", background: "linear-gradient(170deg, #faf6ef, #f4ece0)" }}
               onClick={(e) => e.stopPropagation()}
             >
               {/* Handle */}
-              <div style={{ width: 40, height: 4, borderRadius: 99, background: "rgba(255,248,240,0.08)", margin: "0 auto 20px" }} />
+              <div style={{ width: 40, height: 4, borderRadius: 99, background: C.cardBorder, margin: "0 auto 20px" }} />
 
               <h2 style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontWeight: 300, fontSize: "1.25rem", color: C.text, marginBottom: 20 }}>
                 Settings
               </h2>
+
+              {/* Deepgram API Key */}
+              <div style={{ marginBottom: 20 }}>
+                <p style={{ ...S.label, marginBottom: 8 }}>Deepgram API Key</p>
+                <p style={{ color: C.textFaint, fontSize: 11, marginBottom: 8 }}>For enhanced voice recognition. Leave blank to use browser default.</p>
+                <input
+                  type="password"
+                  placeholder="Enter Deepgram API key..."
+                  value={deepgramKey}
+                  onChange={(e) => {
+                    setDeepgramKey(e.target.value);
+                    saveDeepgramKey(e.target.value);
+                  }}
+                  style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: C.card, border: `1px solid ${C.cardBorder}`, color: C.text, fontSize: 13, outline: "none", fontFamily: "inherit" }}
+                />
+                {deepgramKey && (
+                  <p style={{ color: C.green, fontSize: 10, marginTop: 4, letterSpacing: "0.05em" }}>Deepgram key saved - will be used for voice recognition</p>
+                )}
+              </div>
 
               {/* TTS Speed */}
               <div style={{ marginBottom: 20 }}>
@@ -1607,7 +1798,7 @@ export default function ScriptureMemorizeApp() {
               {/* About */}
               <div style={{ paddingTop: 16, borderTop: `1px solid ${C.cardBorder}`, textAlign: "center" }}>
                 <p style={{ color: C.textDim, fontSize: 12 }}>Scripture Memory</p>
-                <p style={{ color: C.textFaint, fontSize: 10, marginTop: 2 }}>v0.2.0 &middot; KJV</p>
+                <p style={{ color: C.textFaint, fontSize: 10, marginTop: 2 }}>v0.3.0 &middot; KJV</p>
               </div>
             </div>
           </div>
